@@ -20,6 +20,21 @@ app.get("/health", (_req, res) => {
   res.json({ status: "ok", timestamp: Date.now() });
 });
 
+// Root route
+app.get("/", (_req, res) => {
+  res.json({
+    name: "ImpactFund Backend API",
+    status: "running",
+    endpoints: {
+      "POST /upload-evidence": "Upload images to IPFS via Pinata",
+      "POST /verify-milestone": "AI verification via GPT-4o",
+      "GET /verdict/:addr/:id": "Cached AI verdict",
+      "POST /resolve-vote": "Trigger on-chain vote resolution",
+      "GET /health": "Health check",
+    },
+  });
+});
+
 // Routes
 app.use("/", uploadRoutes);
 app.use("/", verifyRoutes);

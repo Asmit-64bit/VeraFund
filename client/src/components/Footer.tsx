@@ -1,25 +1,13 @@
 export default function Footer() {
   return (
-    <footer
-      style={{
-        borderTop: "3px solid #1a1a1a",
-        padding: "32px",
-        marginTop: 64,
-        background: "#ffffff",
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        flexWrap: "wrap",
-        gap: 16,
-      }}
-    >
+    <footer className="footer">
       <div>
-        <span style={{ fontWeight: 700, fontSize: 18 }}>🌱 ImpactFund</span>
-        <p style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 4 }}>
-          Transparent milestone-gated donations on Ethereum
-        </p>
+        <div className="footer-brand">🌱 ImpactFund</div>
+        <div className="footer-sub">
+          Transparent milestone-gated donations on Ethereum Sepolia
+        </div>
       </div>
-      <div style={{ display: "flex", gap: 16, fontSize: 14 }}>
+      <div className="footer-links">
         <a
           href="https://sepolia.etherscan.io/address/0xC37cb2Eb3ef384906F8Cc48bCa889449B1E7F83D"
           target="_blank"
@@ -27,6 +15,14 @@ export default function Footer() {
           className="tx-link"
         >
           Factory Contract ↗
+        </a>
+        <a
+          href="https://sepolia.etherscan.io/address/0x7ec109b7931cdc7a3869a033E4fb5cF9a934670c"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="tx-link"
+        >
+          DonorNFT ↗
         </a>
         <a
           href="https://github.com/Arav-Arun/ImpactFund"

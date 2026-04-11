@@ -15,7 +15,14 @@ const STATUS_TAG_COLORS: Record<number, string> = {
   3: "neo-tag-red",
 };
 
-function CampaignCard({ campaign }: { campaign: CampaignInfo }) {
+const STATUS_CARD_ACCENT: Record<number, string> = {
+  0: "var(--bg-yellow)",
+  1: "var(--bg-green)",
+  2: "var(--bg-blue)",
+  3: "var(--bg-red)",
+};
+
+function CampaignCard({ campaign, index }: { campaign: CampaignInfo; index: number }) {
   const goal = ethers.formatEther(campaign.goalAmount);
   const raised = ethers.formatEther(campaign.raisedAmount);
   const percent =
@@ -26,8 +33,15 @@ function CampaignCard({ campaign }: { campaign: CampaignInfo }) {
   const isExpired = deadline.getTime() < Date.now();
 
   return (
-    <Link to={`/campaign/${campaign.address}`} className="campaign-card">
-      <div className="campaign-card-header">
+    <Link
+      to={`/campaign/${campaign.address}`}
+      className="campaign-card animate-slideup"
+      style={{ animationDelay: `${index * 0.08}s` }}
+    >
+      <div
+        className="campaign-card-header"
+        style={{ borderBottom: `3px solid ${STATUS_CARD_ACCENT[campaign.status] || "var(--bg)"}` }}
+      >
         <div>
           <div className="campaign-card-title">{campaign.title}</div>
           <div className="campaign-card-ngo">by {campaign.ngoName}</div>
@@ -44,14 +58,16 @@ function CampaignCard({ campaign }: { campaign: CampaignInfo }) {
             className="neo-progress-bar"
             style={{ width: `${Math.min(percent, 100)}%` }}
           >
-            {percent}%
+            {percent > 5 ? `${percent}%` : ""}
           </div>
         </div>
       </div>
 
       <div className="campaign-card-footer">
         <div>
-          <div className="campaign-card-amount">{raised} ETH</div>
+          <div className="campaign-card-amount">
+            {Number(raised).toFixed(4)} ETH
+          </div>
           <div className="campaign-card-goal">of {goal} ETH goal</div>
         </div>
         <div style={{ textAlign: "right" }}>
@@ -59,7 +75,9 @@ function CampaignCard({ campaign }: { campaign: CampaignInfo }) {
             {campaign.milestoneCount} milestones
           </div>
           <div className="campaign-card-goal">
-            {isExpired ? "Deadline passed" : `${campaign.bootstrapPercent}% bootstrap`}
+            {isExpired
+              ? "Deadline passed"
+              : `${campaign.bootstrapPercent}% bootstrap`}
           </div>
         </div>
       </div>
@@ -67,13 +85,55 @@ function CampaignCard({ campaign }: { campaign: CampaignInfo }) {
   );
 }
 
+function HowItWorks() {
+  const steps = [
+    {
+      icon: "🏗️",
+      title: "NGO Creates Campaign",
+      desc: "Set a funding goal, define milestones, and choose a bootstrap grant percentage.",
+    },
+    {
+      icon: "💰",
+      title: "Donors Fund It",
+      desc: "Anyone can contribute ETH. Each donor gets a soulbound NFT with voting rights.",
+    },
+    {
+      icon: "🤖",
+      title: "AI Verifies Progress",
+      desc: "NGO uploads evidence → GPT-4o vision analyzes it → donors vote on each milestone.",
+    },
+    {
+      icon: "✅",
+      title: "Funds Released",
+      desc: "If approved, funds release. If quorum isn't met, AI acts as the tiebreaker.",
+    },
+  ];
+
+  return (
+    <section className="how-it-works">
+      <h2 className="how-it-works-title">How It Works</h2>
+      <div className="how-it-works-grid">
+        {steps.map((step, i) => (
+          <div
+            className="how-step animate-slideup"
+            key={i}
+            style={{ animationDelay: `${i * 0.1}s` }}
+          >
+            <div className="how-step-number">{i + 1}</div>
+            <div className="how-step-icon">{step.icon}</div>
+            <div className="how-step-title">{step.title}</div>
+            <div className="how-step-desc">{step.desc}</div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export default function Home({ wallet }: HomeProps) {
   const { campaigns, loading, error } = useAllCampaigns(wallet.provider);
 
-  const totalRaised = campaigns.reduce(
-    (sum, c) => sum + c.raisedAmount,
-    0n
-  );
+  const totalRaised = campaigns.reduce((sum, c) => sum + c.raisedAmount, 0n);
 
   return (
     <>
@@ -86,26 +146,32 @@ export default function Home({ wallet }: HomeProps) {
           Every milestone verified.
         </h1>
         <p className="hero-subtitle">
-          Fund real-world projects on the blockchain. Your ETH locked in escrow
-          until NGOs prove progress — verified by donors and AI.
+          Fund real-world impact on the blockchain. Your ETH stays locked in
+          escrow until NGOs prove progress — verified by donors and AI.
         </p>
         <div className="hero-actions">
           {!wallet.account ? (
-            <button className="neo-btn neo-btn-primary" onClick={wallet.connect}>
+            <button
+              className="neo-btn neo-btn-primary neo-btn-lg"
+              onClick={wallet.connect}
+            >
               🦊 Connect Wallet to Start
             </button>
           ) : (
-            <Link to="/create" className="neo-btn neo-btn-primary">
+            <Link to="/create" className="neo-btn neo-btn-primary neo-btn-lg">
               ✨ Create a Campaign
             </Link>
           )}
-          <a href="#campaigns" className="neo-btn neo-btn-outline">
+          <a href="#campaigns" className="neo-btn neo-btn-outline neo-btn-lg">
             ↓ Explore Campaigns
           </a>
         </div>
       </section>
 
-      {/* Stats */}
+      {/* How It Works */}
+      <HowItWorks />
+
+      {/* Stats + Grid */}
       <div className="page-container">
         <div className="stats-bar">
           <div className="stat-card">
@@ -134,9 +200,11 @@ export default function Home({ wallet }: HomeProps) {
 
         {/* Campaign Grid */}
         <div id="campaigns">
-          <h2 className="page-title" style={{ fontSize: 32, marginBottom: 24 }}>
-            All Campaigns
-          </h2>
+          <div className="page-title-block">
+            <h2 className="page-title">
+              All Campaigns
+            </h2>
+          </div>
 
           {loading && (
             <div className="loading-spinner">
@@ -170,8 +238,8 @@ export default function Home({ wallet }: HomeProps) {
           )}
 
           <div className="campaign-grid">
-            {campaigns.map((c) => (
-              <CampaignCard key={c.address} campaign={c} />
+            {campaigns.map((c, i) => (
+              <CampaignCard key={c.address} campaign={c} index={i} />
             ))}
           </div>
         </div>

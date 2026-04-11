@@ -1,152 +1,95 @@
-# ImpactFund 🌱
+# 🌱 ImpactFund
 
-> **Milestone-gated donation escrow on the blockchain.**
-> Donors lock funds in a smart contract. NGOs unlock them — one verified milestone at a time.
+**Milestone-gated donation escrow on Ethereum** — transparent, AI-verified, donor-governed.
 
----
-
-## The Problem
-
-Traditional NGO donations are a black box. You send money and hope for the best. There's no accountability mechanism, no proof of progress, and no way to pause funding if something goes wrong. ImpactFund makes accountability structural — not optional.
+Instead of releasing funds all at once, donated ETH is locked in a smart contract and released in tranches — only when an NGO proves real-world progress through verified evidence, AI analysis, and weighted donor voting.
 
 ---
 
 ## How It Works
 
 ```
-Many donors contribute → Crowdfunding goal hit → Bootstrap grant released to NGO
+Donors contribute ETH → Funding goal reached → Bootstrap grant auto-releases
 → NGO does work → Submits image evidence to IPFS → GPT-4o analyzes evidence
 → 7-day donor vote opens → Quorum check → Funds released or rejected
-→ Repeat per milestone
+→ Repeat per milestone → Campaign completes
 ```
 
-### Three Key Design Decisions
+### Key Features
 
-1. **Bootstrap Grant (Milestone 0)** — A configurable % (1-15%) released immediately when the funding goal is hit, giving the NGO operating capital to start work. No voting required — agreed upfront by donors.
-
-2. **Crowdfunding** — Any number of donors contribute to a single campaign. Each receives a soulbound DonorNFT (ERC-5192) that grants voting rights weighted by donation size.
-
-3. **Quorum + AI Fallback** — If fewer than 30% of donors vote in the 7-day window, GPT-4o's AI verdict becomes the tiebreaker instead of stalling the campaign forever.
-
----
-
-## Demo
-
-| Action              | Transaction              |
-| ------------------- | ------------------------ |
-| Campaign deployed   | [View on Etherscan ↗](#) |
-| Donation made       | [View on Etherscan ↗](#) |
-| Bootstrap released  | [View on Etherscan ↗](#) |
-| Milestone submitted | [View on Etherscan ↗](#) |
-| Funds released      | [View on Etherscan ↗](#) |
-
-> **Contract Address:** `0x...` — [View on Sepolia Etherscan ↗](#)
-
----
-
-## Features
-
-- **Escrow-based donations** — ETH locked in smart contract until milestones are verified
-- **Bootstrap grant** — Configurable % released immediately on funding goal hit for NGO operating costs
-- **IPFS evidence storage** — Images and documents stored decentrally via Pinata
-- **AI verification** — GPT-4o analyzes milestone evidence and returns a confidence score
-- **7-day voting window** — Time-bounded donor voting with quorum requirements
-- **Weighted donor voting** — Donation size determines voting power
-- **AI tiebreaker** — If quorum fails, AI score ≥ 70 auto-approves; < 70 auto-rejects
-- **Soulbound DonorNFT** — Non-transferable proof of donation and voting rights (ERC-5192)
-- **Full on-chain trail** — Every donation, submission, vote, and release is a real transaction
-- **Refund protection** — Donors can reclaim funds if campaign is cancelled or deadline passes
+- **🏦 Escrow** — ETH locked in smart contracts, released only on milestone approval
+- **🚀 Bootstrap Grant** — 1-15% released immediately when funding goal is hit, giving NGOs operating capital
+- **🗳️ Weighted Voting** — Donor voting power proportional to donation amount (soulbound NFT)
+- **🤖 AI Tiebreaker** — If quorum isn't met in 7 days, GPT-4o vision verdict decides
+- **📸 IPFS Evidence** — Milestone proof uploaded to IPFS via Pinata, permanently stored
+- **🔒 Soulbound NFTs** — Non-transferable donor tokens (ERC-5192) for voting rights
 
 ---
 
 ## Tech Stack
 
-| Layer                 | Technology                      |
-| --------------------- | ------------------------------- |
-| Smart Contracts       | Solidity, Hardhat, OpenZeppelin |
-| Blockchain            | Ethereum Sepolia Testnet        |
-| Wallet                | MetaMask via ethers.js v6       |
-| Frontend              | React 18, Tailwind CSS          |
-| File Storage          | IPFS via Pinata SDK             |
-| AI Verification       | OpenAI GPT-4o API               |
-| Backend               | Node.js, Express                |
-| Contract Verification | Etherscan Sepolia               |
+| Layer | Technology |
+|-------|------------|
+| Smart Contracts | Solidity 0.8.27, Hardhat, OpenZeppelin |
+| Blockchain | Ethereum Sepolia Testnet |
+| Frontend | React 18, TypeScript, Vite |
+| UI Style | Neobrutalism (Space Grotesk, thick borders, vivid colors) |
+| Wallet | MetaMask via ethers.js v6 |
+| Backend | Node.js, Express |
+| File Storage | IPFS via Pinata SDK |
+| AI Verification | OpenAI GPT-4o (vision) |
 
 ---
 
-## Smart Contracts
+## Deployed Contracts (Sepolia)
 
-### `ImpactFundFactory.sol`
-
-Entry point. Deploys individual campaign contracts and maintains a registry of all campaigns.
-
-### `ImpactFundCampaign.sol`
-
-Core escrow logic. Holds donated ETH, manages bootstrap grants, milestone submissions, 7-day voting windows with quorum checks, AI tiebreaker resolution, and tranche releases.
-
-**Key functions:**
-
-```solidity
-donate()                                        // payable, records donor, mints DonorNFT, triggers bootstrap if goal hit
-submitMilestone(milestoneId, ipfsHash)           // NGO only, opens 7-day voting window
-vote(milestoneId, approve)                       // donor only, weighted by donation
-setAIScore(milestoneId, score)                   // backend signer only, stores AI score for tiebreaker
-resolveVote(milestoneId)                         // anyone, after voting window closes
-refund()                                         // donor pull if campaign cancelled
-```
-
-**Resolution logic:**
-```
-Quorum reached (30%+ voted)?
-├── YES → 60%+ approve? → Release tranche / Reject
-└── NO  → AI score ≥ 70? → Auto-approve / Auto-reject
-```
-
-### `DonorNFT.sol`
-
-Soulbound ERC-5192 token. One per donor per campaign. Proves voting rights. Non-transferable.
+| Contract | Address | Etherscan |
+|----------|---------|-----------|
+| DonorNFT | `0x7ec109b7931cdc7a3869a033E4fb5cF9a934670c` | [View ↗](https://sepolia.etherscan.io/address/0x7ec109b7931cdc7a3869a033E4fb5cF9a934670c#code) |
+| ImpactFundFactory | `0xC37cb2Eb3ef384906F8Cc48bCa889449B1E7F83D` | [View ↗](https://sepolia.etherscan.io/address/0xC37cb2Eb3ef384906F8Cc48bCa889449B1E7F83D#code) |
 
 ---
 
 ## Project Structure
 
 ```
-impactfund/
-├── contracts/
-│   ├── ImpactFundFactory.sol
-│   ├── ImpactFundCampaign.sol
-│   └── DonorNFT.sol
-├── scripts/
-│   └── deploy.js
+ImpactFund/
+├── contracts/                  # Solidity smart contracts
+│   ├── ImpactFundCampaign.sol  # Campaign escrow + milestone logic
+│   ├── ImpactFundFactory.sol   # Campaign deployer + registry
+│   └── DonorNFT.sol            # Soulbound ERC-5192 donor token
 ├── test/
-│   └── ImpactFund.test.js         ← 49 tests
-├── server/
-│   ├── index.js
-│   ├── routes/
-│   │   ├── upload.js              ← POST /upload-evidence
-│   │   └── verify.js             ← POST /verify-milestone, GET /verdict, POST /resolve-vote
-│   └── .env.example
-├── src/                           ← Frontend (React + Tailwind)
-│   ├── constants.js
-│   ├── hooks/
-│   └── pages/
+│   └── ImpactFund.test.js      # 49 unit tests
+├── scripts/
+│   └── deploy.js               # Sepolia deployment script
+├── client/                     # React TypeScript frontend
+│   └── src/
+│       ├── pages/              # Home, CampaignDetail, CreateCampaign, Dashboard
+│       ├── components/         # Navbar, Footer
+│       ├── hooks/              # useWallet, useCampaign
+│       ├── types/              # TypeScript type definitions
+│       ├── constants.ts        # ABIs, addresses, status labels
+│       └── index.css           # Neobrutalism design system
+├── server/                     # Express backend
+│   ├── index.js                # Server entry point
+│   └── routes/
+│       ├── upload.js           # IPFS upload via Pinata
+│       └── verify.js           # GPT-4o verification + on-chain resolution
 ├── hardhat.config.js
 └── .env.example
 ```
 
 ---
 
-## Getting Started
+## Quick Start
 
 ### Prerequisites
 
-- Node.js v18+
+- Node.js 18+
 - MetaMask browser extension
-- Sepolia testnet ETH (get from [sepoliafaucet.com](https://sepoliafaucet.com))
-- OpenAI API key with GPT-4o access
-- Pinata account for IPFS uploads
+- Sepolia testnet ETH ([faucet](https://sepoliafaucet.com))
 
-### 1. Clone and install
+### 1. Clone & Install
 
 ```bash
 git clone https://github.com/Arav-Arun/ImpactFund.git
@@ -154,164 +97,107 @@ cd ImpactFund
 npm install
 ```
 
-### 2. Set up environment variables
+### 2. Environment Variables
 
 ```bash
+# Root .env (for contract deployment)
 cp .env.example .env
+
+# Server .env (for backend)
 cp server/.env.example server/.env
 ```
 
-Fill in your keys in both `.env` files.
+Fill in the values:
 
-### 3. Compile and test contracts
+| Variable | Where to get it |
+|----------|----------------|
+| `SEPOLIA_RPC_URL` | [Infura](https://infura.io) or [Alchemy](https://alchemy.com) (free) |
+| `PRIVATE_KEY` | MetaMask → Account Details → Show Private Key |
+| `ETHERSCAN_API_KEY` | [etherscan.io/apis](https://etherscan.io/apis) (free) |
+| `BACKEND_SIGNER_ADDRESS` | Your MetaMask public address (`0x...`) |
+| `OPENAI_API_KEY` | [platform.openai.com](https://platform.openai.com/api-keys) |
+| `PINATA_API_KEY` / `PINATA_SECRET` | [app.pinata.cloud](https://app.pinata.cloud) (free) |
+
+### 3. Run Tests
 
 ```bash
-npx hardhat compile
 npx hardhat test
+# → 49 passing
 ```
 
-### 4. Deploy contracts to Sepolia
+### 4. Start Frontend
 
 ```bash
-npx hardhat run scripts/deploy.js --network sepolia
+cd client
+npm install
+npm run dev
+# → http://localhost:5173
 ```
 
-Copy the output contract addresses into `src/constants.js`.
-
-Verify on Etherscan:
-
-```bash
-npx hardhat verify --network sepolia <DonorNFT_ADDRESS>
-npx hardhat verify --network sepolia <Factory_ADDRESS> "<DonorNFT_ADDRESS>" "<BACKEND_SIGNER_ADDRESS>"
-```
-
-### 5. Start the backend
+### 5. Start Backend
 
 ```bash
 cd server
+npm install
 node index.js
-# Running on http://localhost:3001
+# → http://localhost:3001
 ```
 
-### 6. Start the frontend
+### 6. Test the Full Flow
 
-```bash
-npm run dev
-# Running on http://localhost:5173
-```
+1. Open `http://localhost:5173` → Connect MetaMask (Sepolia)
+2. **Create Campaign** → Fill the 4-step form → Deploy to blockchain
+3. Switch MetaMask account → **Donate** ETH to the campaign
+4. When goal is reached → bootstrap grant auto-releases
+5. Switch to NGO account → **Submit milestone evidence** (uploads to IPFS + AI verification)
+6. Switch to donor → **Vote** approve or challenge
+7. After voting window → **Resolve vote** (quorum check or AI tiebreaker)
 
 ---
 
-## API Reference
+## Smart Contract Architecture
 
-### `POST /upload-evidence`
+### ImpactFundCampaign.sol
+- Escrow contract holding donated ETH
+- Bootstrap grant (Milestone 0) auto-releases when goal is hit
+- 7-day voting window per milestone with **30% quorum** and **60% approval** threshold
+- AI tiebreaker: if quorum not met, GPT-4o score ≥ 70 → auto-approve
+- ReentrancyGuard on all ETH transfers
+- Refund when campaign cancelled or deadline passes
 
-Upload milestone evidence to IPFS via Pinata.
+### ImpactFundFactory.sol
+- Deploys new campaign contracts
+- Validates bootstrap % (1-15%) and milestone percentages (must sum to 100%)
+- Registers campaigns and authorizes DonorNFT minting
 
-**Request:** `multipart/form-data` with image files (field: `files`)
-
-**Response:**
-
-```json
-{
-  "cids": ["QmXyz123...", "QmAbc456..."]
-}
-```
-
----
-
-### `POST /verify-milestone`
-
-Run AI verification on submitted evidence using GPT-4o vision. Writes AI score on-chain.
-
-**Request:**
-
-```json
-{
-  "milestoneId": 1,
-  "campaignAddress": "0x...",
-  "cids": ["QmXyz123..."],
-  "milestoneDescription": "Complete foundation work for 3 wells"
-}
-```
-
-**Response:**
-
-```json
-{
-  "score": 78,
-  "verdict": "Verified",
-  "summary": "Images show clear excavation work. Visible progress across 3 sites."
-}
-```
+### DonorNFT.sol
+- Soulbound ERC-5192 (non-transferable)
+- One token per donor per campaign
+- Voting weight = donation amount
 
 ---
 
-### `GET /verdict/:campaignAddress/:milestoneId`
+## Backend API
 
-Returns cached AI verdict. 404 if not yet verified.
-
----
-
-### `POST /resolve-vote`
-
-Trigger on-chain vote resolution after the 7-day window closes.
-
-**Request:**
-
-```json
-{
-  "campaignAddress": "0x...",
-  "milestoneId": 1
-}
-```
-
-**Response:**
-
-```json
-{
-  "txHash": "0x...",
-  "outcome": "approved",
-  "resolvedByAI": false
-}
-```
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/upload-evidence` | POST | Upload images to IPFS via Pinata |
+| `/verify-milestone` | POST | GPT-4o vision analysis → writes AI score on-chain |
+| `/verdict/:addr/:id` | GET | Cached AI verification result |
+| `/resolve-vote` | POST | Triggers on-chain `resolveVote()` after voting window |
+| `/health` | GET | Health check |
 
 ---
 
-## How the AI Verification Works
+## Security
 
-When an NGO submits a milestone, GPT-4o vision receives:
-
-- The milestone description (what was promised)
-- The submitted images fetched from IPFS (what was delivered)
-
-It returns a **confidence score (0–100)**, a **verdict** (`Verified` / `Inconclusive` / `Flagged`), and a **summary**.
-
-- If quorum is reached (30%+ voted): donor vote decides
-- If quorum is NOT reached: AI score becomes the tiebreaker
-  - Score ≥ 70 → auto-approve, release tranche
-  - Score < 70 → auto-reject, NGO can resubmit
-
-The AI advises — donors decide. Fund release is always gated by the smart contract.
-
----
-
-## Why This Is Genuinely Decentralized
-
-| Claim                            | How it's proven                          |
-| -------------------------------- | ---------------------------------------- |
-| Funds never touch a middleman    | ETH held only by the smart contract      |
-| Bootstrap is agreed upfront      | % set at creation, visible to all donors |
-| NGO cannot self-approve releases | Contract requires donor vote or AI check |
-| Evidence is permanent            | Stored on IPFS, hash recorded on-chain   |
-| History is tamper-proof          | Every action is an immutable on-chain tx |
-| Anyone can verify                | All tx hashes link to public Etherscan   |
-
----
-
-## Team
-
-Built at KJSSE GajShield Hack X by team _Deploy For Good_.
+- ✅ OpenZeppelin ReentrancyGuard on all ETH transfers
+- ✅ Access control: onlyNGO, onlyDonor, onlyBackendSigner modifiers
+- ✅ Soulbound NFTs prevent vote manipulation via transfer
+- ✅ Double-vote, double-refund, and double-release prevention
+- ✅ Deployer-only milestone addition
+- ✅ Vote reset on milestone resubmission
+- ✅ 49 unit tests covering edge cases
 
 ---
 
