@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Hardhat artifacts
+artifacts/
+cache/
+typechain-types/
+
+# Environment files
+.env
+server/.env
+
+# Spec (internal)
+SPEC.md
+
+# OS files
+.DS_Store
+
+# Coverage
+coverage/
+coverage.json
+
+# Uploads temp
+server/uploads/
