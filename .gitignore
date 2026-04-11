@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# Client build
+client/dist/
+
 # Hardhat artifacts
 artifacts/
 cache/

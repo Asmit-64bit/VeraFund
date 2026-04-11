@@ -2,13 +2,14 @@
 pragma solidity ^0.8.27;
 
 import "./DonorNFT.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// @title ImpactFundCampaign — Milestone-gated donation escrow with bootstrap grant
 /// @notice One instance per campaign. Holds ETH in escrow. Features:
 ///         - Bootstrap grant released automatically when funding goal is hit
 ///         - 7-day voting window per milestone with quorum requirement
 ///         - AI tiebreaker when quorum is not met
-contract ImpactFundCampaign {
+contract ImpactFundCampaign is ReentrancyGuard {
     // ──────────────────────────────────────────────
     // Enums
     // ──────────────────────────────────────────────
@@ -97,6 +98,9 @@ contract ImpactFundCampaign {
     /// @notice Track if donor has already been refunded
     mapping(address => bool) public refunded;
 
+    /// @notice The address that deployed this contract (factory or direct deployer)
+    address public deployer;
+
     // ──────────────────────────────────────────────
     // Events
     // ──────────────────────────────────────────────
@@ -163,6 +167,7 @@ contract ImpactFundCampaign {
         status = CampaignStatus.Fundraising;
         donorNFTContract = DonorNFT(_donorNFT);
         backendSigner = _backendSigner;
+        deployer = msg.sender;
 
         // Auto-create Milestone 0 (Bootstrap Grant)
         milestones.push(Milestone({
@@ -191,6 +196,7 @@ contract ImpactFundCampaign {
         uint256 _fundPercent,
         uint256 _milestoneDeadline
     ) external {
+        require(msg.sender == deployer, "Campaign: only deployer can add milestones");
         require(raisedAmount == 0, "Campaign: cannot add milestones after donations");
 
         milestones.push(Milestone({
@@ -213,7 +219,7 @@ contract ImpactFundCampaign {
     // ──────────────────────────────────────────────
 
     /// @notice Accept ETH donation, record donor, mint DonorNFT, trigger bootstrap if goal hit
-    function donate() external payable inStatus(CampaignStatus.Fundraising) {
+    function donate() external payable nonReentrant inStatus(CampaignStatus.Fundraising) {
         require(msg.value > 0, "Campaign: donation must be > 0");
         require(block.timestamp < campaignDeadline, "Campaign: fundraising deadline passed");
 
@@ -287,6 +293,11 @@ contract ImpactFundCampaign {
         m.votesAgainst = 0;
         m.resolvedByAI = false;
         m.aiScore = 0;
+
+        // Reset hasVoted for all donors so they can re-vote on resubmission
+        for (uint256 i = 0; i < donorList.length; i++) {
+            hasVoted[donorList[i]][milestoneId] = false;
+        }
 
         emit MilestoneSubmitted(milestoneId, ipfsHash);
         emit VotingOpened(milestoneId, m.votingDeadline);
@@ -384,7 +395,7 @@ contract ImpactFundCampaign {
     // Internal: release milestone tranche
     // ──────────────────────────────────────────────
 
-    function _releaseMilestoneFunds(uint256 milestoneId) internal {
+    function _releaseMilestoneFunds(uint256 milestoneId) internal nonReentrant {
         Milestone storage m = milestones[milestoneId];
 
         // Calculate tranche: fundPercent is % of total goal
@@ -415,7 +426,7 @@ contract ImpactFundCampaign {
     // ──────────────────────────────────────────────
 
     /// @notice Donor can reclaim funds if campaign is cancelled or deadline passed with no activity
-    function refund() external onlyDonor {
+    function refund() external onlyDonor nonReentrant {
         require(
             status == CampaignStatus.Cancelled ||
             (status == CampaignStatus.Fundraising && block.timestamp > campaignDeadline),
