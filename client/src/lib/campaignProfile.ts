@@ -1,14 +1,10 @@
+import { IPFS_GATEWAYS } from "../constants";
 import { normalizeCampaignCategory } from "./campaigns";
 import type { CampaignProfile, CreatorProfile } from "../types";
 
 const PROFILE_CID_MARKER = "[PROFILE_CID:";
 const CREATOR_PROFILE_STORAGE_PREFIX = "verafund:creator-profile:";
 const CAMPAIGN_PROFILE_STORAGE_PREFIX = "verafund:campaign-profile:";
-const IPFS_GATEWAYS = [
-  "https://ipfs.io/ipfs/",
-  "https://gateway.pinata.cloud/ipfs/",
-  "https://w3s.link/ipfs/",
-] as const;
 const IPFS_FETCH_TIMEOUT_MS = 1800;
 const profileCache = new Map<string, CampaignProfile>();
 const MEDIA_PROXY_PATH = "/api/ipfs-asset";

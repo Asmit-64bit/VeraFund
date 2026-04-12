@@ -158,14 +158,22 @@ The repository includes [/.env.example](/Users/arav/Desktop/VeraFund/.env.exampl
 Core env vars:
 
 - `SEPOLIA_RPC_URL`
-- `PRIVATE_KEY`
 - `ETHERSCAN_API_KEY`
-- `BACKEND_SIGNER_ADDRESS`
+- `FACTORY_ADDRESS`
+- `FACTORY_ADDRESSES`
 - `BACKEND_SIGNER_PRIVATE_KEY`
 - `OPENAI_API_KEY`
 - `PINATA_API_KEY`
 - `PINATA_SECRET`
+- `IPFS_GATEWAYS`
+
+Frontend env vars:
+
+- `VITE_FACTORY_ADDRESS`
+- `VITE_FACTORY_ADDRESSES`
+- `VITE_BLOCK_EXPLORER_URL`
 - `VITE_WALLETCONNECT_PROJECT_ID`
+- `VITE_IPFS_GATEWAYS`
 
 Optional provider-backed verification env vars:
 
@@ -212,8 +220,8 @@ Local URLs:
 
 ## Development notes
 
-- The contract test suite passes with `61 passing`.
 - The client production build is clean.
+- The contract code compiles cleanly with Hardhat.
 - Each campaign uses one primary category for cleaner discovery and filtering.
 - Campaign media is proxied through the app for safer display on restrictive networks.
 - Some older campaigns deployed before the newer unlock model may still behave differently from current campaigns.

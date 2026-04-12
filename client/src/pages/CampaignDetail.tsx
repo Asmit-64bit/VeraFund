@@ -8,6 +8,7 @@ import {
   CAMPAIGN_STATUS,
   MILESTONE_STATUS,
   API_BASE,
+  BLOCK_EXPLORER_URL,
 } from "../constants";
 import { getMediaProxyUrl, getSatelliteViewUrl } from "../lib/campaignProfile";
 import { normalizeCampaignCategories } from "../lib/campaigns";
@@ -1110,7 +1111,7 @@ export default function CampaignDetail({ wallet }: DetailProps) {
                   <p>{entry.summary}</p>
                   <a
                     className="tx-link"
-                    href={`https://sepolia.etherscan.io/tx/${entry.txHash}`}
+                    href={`${BLOCK_EXPLORER_URL}/tx/${entry.txHash}`}
                     target="_blank"
                     rel="noreferrer"
                   >
@@ -1288,7 +1289,7 @@ export default function CampaignDetail({ wallet }: DetailProps) {
                   <p>Transaction submitted.</p>
                   <a
                     className="tx-link"
-                    href={`https://sepolia.etherscan.io/tx/${txHash}`}
+                    href={`${BLOCK_EXPLORER_URL}/tx/${txHash}`}
                     target="_blank"
                     rel="noopener noreferrer"
                   >
@@ -1902,7 +1903,7 @@ export default function CampaignDetail({ wallet }: DetailProps) {
           Contract:{" "}
           <a
             className="tx-link"
-            href={`https://sepolia.etherscan.io/address/${address}`}
+            href={`${BLOCK_EXPLORER_URL}/address/${address}`}
             target="_blank"
             rel="noopener noreferrer"
           >

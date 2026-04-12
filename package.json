@@ -4,7 +4,8 @@
   "description": "> **Milestone-gated donation escrow on the blockchain.** > Donors lock funds in a smart contract. NGOs unlock them — one verified milestone at a time.",
   "main": "index.js",
   "scripts": {
-    "test": "npx hardhat test",
+    "contracts:compile": "npx hardhat compile",
+    "build:client": "npm --prefix client run build",
     "dev:client": "cd client && npm run dev",
     "dev:server": "cd server && node index.js",
     "dev": "concurrently \"npm run dev:client\" \"npm run dev:server\""

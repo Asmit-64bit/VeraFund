@@ -3,6 +3,7 @@ import { ethers } from "ethers";
 import { useConnectModal } from "@rainbow-me/rainbowkit";
 import { useAccount, useChainId, useDisconnect, useSwitchChain, useWalletClient } from "wagmi";
 import {
+  BLOCK_EXPLORER_URL,
   READONLY_SEPOLIA_RPC,
   READONLY_SEPOLIA_RPCS,
   SEPOLIA_CHAIN_ID,
@@ -90,7 +91,7 @@ export function useWallet(): WalletState {
               chainName: "Sepolia Testnet",
               nativeCurrency: { name: "SepoliaETH", symbol: "ETH", decimals: 18 },
               rpcUrls: [READONLY_SEPOLIA_RPC],
-              blockExplorerUrls: ["https://sepolia.etherscan.io"],
+              blockExplorerUrls: [BLOCK_EXPLORER_URL],
             },
           ],
         });

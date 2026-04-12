@@ -1,15 +1,48 @@
-// Contract addresses — deployed on Sepolia
-export const FACTORY_ADDRESS = "0x6A837595E2592d699d48eB2DAcF47Df9493035d2";
-export const READONLY_FACTORY_ADDRESSES = [FACTORY_ADDRESS] as const;
-
-// Backend API
-export const API_BASE = import.meta.env.VITE_API_BASE || "/api";
-export const READONLY_SEPOLIA_RPCS = [
-  import.meta.env.VITE_SEPOLIA_RPC_URL || "https://gateway.tenderly.co/public/sepolia",
+const DEFAULT_FACTORY_ADDRESS = "0x6A837595E2592d699d48eB2DAcF47Df9493035d2";
+const DEFAULT_BLOCK_EXPLORER_URL = "https://sepolia.etherscan.io";
+const DEFAULT_SEPOLIA_RPCS = [
+  "https://gateway.tenderly.co/public/sepolia",
   "https://1rpc.io/sepolia",
   "https://ethereum-sepolia-rpc.publicnode.com",
 ] as const;
+const DEFAULT_IPFS_GATEWAYS = [
+  "https://ipfs.io/ipfs/",
+  "https://gateway.pinata.cloud/ipfs/",
+  "https://w3s.link/ipfs/",
+] as const;
+
+function splitCsvEnv(rawValue: string | undefined) {
+  return String(rawValue || "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function uniqueValues<T>(values: Iterable<T>) {
+  return [...new Set(values)];
+}
+
+// Runtime config
+export const FACTORY_ADDRESS =
+  (import.meta.env.VITE_FACTORY_ADDRESS || DEFAULT_FACTORY_ADDRESS).trim();
+export const READONLY_FACTORY_ADDRESSES = uniqueValues([
+  FACTORY_ADDRESS,
+  ...splitCsvEnv(import.meta.env.VITE_FACTORY_ADDRESSES),
+]) as readonly string[];
+export const API_BASE = import.meta.env.VITE_API_BASE || "/api";
+export const BLOCK_EXPLORER_URL = (
+  import.meta.env.VITE_BLOCK_EXPLORER_URL || DEFAULT_BLOCK_EXPLORER_URL
+).replace(/\/$/, "");
+export const READONLY_SEPOLIA_RPCS = uniqueValues([
+  import.meta.env.VITE_SEPOLIA_RPC_URL || DEFAULT_SEPOLIA_RPCS[0],
+  ...splitCsvEnv(import.meta.env.VITE_SEPOLIA_RPC_FALLBACKS),
+  ...DEFAULT_SEPOLIA_RPCS,
+]) as readonly string[];
 export const READONLY_SEPOLIA_RPC = READONLY_SEPOLIA_RPCS[0];
+export const IPFS_GATEWAYS = uniqueValues([
+  ...splitCsvEnv(import.meta.env.VITE_IPFS_GATEWAYS),
+  ...DEFAULT_IPFS_GATEWAYS,
+]) as readonly string[];
 
 // Chain config
 export const SEPOLIA_CHAIN_ID = 11155111;
