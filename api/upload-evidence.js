@@ -13,8 +13,6 @@ const ALLOWED_IMAGE_MIME_TYPES = new Set([
   "image/jpeg",
   "image/png",
   "image/webp",
-  "image/heic",
-  "image/heif",
 ]);
 
 function isAllowedImageMimeType(mimeType) {
@@ -76,7 +74,7 @@ module.exports = async function handler(req, res) {
     for (const file of uploaded) {
       if (!isAllowedImageMimeType(file.mimetype) || file.size > MAX_IMAGE_SIZE_BYTES) {
         return res.status(400).json({
-          error: "Only JPEG, PNG, WEBP, and HEIC images up to 10 MB are allowed.",
+          error: "Only JPEG, PNG, and WEBP images up to 10 MB are allowed.",
         });
       }
     }

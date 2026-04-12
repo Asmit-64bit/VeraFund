@@ -50,6 +50,12 @@ interface AuditTrailEntry {
 
 type MilestoneVoteMap = Record<number, boolean>;
 
+const MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024;
+const ALLOWED_UPLOAD_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const UPLOAD_TIMEOUT_MS = 60_000;
+const CHAIN_CONFIRMATION_TIMEOUT_MS = 120_000;
+const VERIFY_TIMEOUT_MS = 90_000;
+
 function getReadableAuditTrailError(message: string | null | undefined) {
   const normalized = String(message || "");
 
@@ -117,6 +123,73 @@ function buildProofCode(campaignAddress: string, milestoneId: number, when = new
     .slice(0, 6)
     .toUpperCase();
   return `VERA-${compactAddress}-M${milestoneId}-${utcDate}`;
+}
+
+function validateSelectedImages(files: FileList | null) {
+  const selectedFiles = Array.from(files || []);
+
+  if (selectedFiles.length === 0) {
+    return { ok: false as const, error: "Choose at least one JPG, PNG, or WEBP image." };
+  }
+
+  for (const file of selectedFiles) {
+    if (!ALLOWED_UPLOAD_TYPES.has(file.type)) {
+      return {
+        ok: false as const,
+        error:
+          "Please upload JPG, PNG, or WEBP images. HEIC and HEIF files are not supported reliably in the verifier yet.",
+      };
+    }
+
+    if (file.size > MAX_UPLOAD_SIZE_BYTES) {
+      return {
+        ok: false as const,
+        error: "Each proof image must be 10 MB or smaller.",
+      };
+    }
+  }
+
+  return { ok: true as const, files: selectedFiles };
+}
+
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, timeoutMs: number) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
+async function waitForTransactionWithTimeout(
+  tx: ethers.TransactionResponse,
+  timeoutMs: number
+) {
+  if (tx.provider) {
+    const receipt = await tx.provider.waitForTransaction(tx.hash, 1, timeoutMs);
+    if (!receipt) {
+      throw new Error(
+        "On-chain confirmation is taking too long. Check your wallet or the Sepolia transaction, then refresh the page."
+      );
+    }
+
+    return receipt;
+  }
+
+  return Promise.race([
+    tx.wait(),
+    new Promise<never>((_, reject) => {
+      window.setTimeout(() => {
+        reject(
+          new Error(
+            "On-chain confirmation is taking too long. Check your wallet or the Sepolia transaction, then refresh the page."
+          )
+        );
+      }, timeoutMs);
+    }),
+  ]);
 }
 
 function toProofMarkerWords(value: string, maxWords = 4) {
@@ -550,23 +623,33 @@ export default function CampaignDetail({ wallet }: DetailProps) {
   // ── Submit Milestone ──
   const handleSubmitMilestone = async () => {
     if (!wallet.signer || !address || submitMilestoneId === null || !submitFiles?.length) return;
+    const validatedFiles = validateSelectedImages(submitFiles);
+    if (!validatedFiles.ok) {
+      toast.error(validatedFiles.error, { id: "submit" });
+      return;
+    }
+
     setSubmitting(true);
     try {
       // 1. Upload to IPFS
       toast.loading("Uploading evidence to IPFS...", { id: "submit" });
       const formData = new FormData();
-      for (let i = 0; i < submitFiles.length; i++) {
-        formData.append("files", submitFiles[i]);
+      for (const file of validatedFiles.files) {
+        formData.append("files", file);
       }
       formData.append("claimedLatitude", claimedLatitude);
       formData.append("claimedLongitude", claimedLongitude);
       formData.append("claimedLocationLabel", claimedLocationLabel);
       formData.append("campaignAddress", address);
       formData.append("milestoneId", String(submitMilestoneId));
-      const uploadRes = await fetch(`${API_BASE}/upload-evidence`, {
+      const uploadRes = await fetchWithTimeout(
+        `${API_BASE}/upload-evidence`,
+        {
         method: "POST",
         body: formData,
-      });
+        },
+        UPLOAD_TIMEOUT_MS
+      );
       if (!uploadRes.ok) {
         const uploadError = await uploadRes.json().catch(() => null);
         throw new Error(uploadError?.error || "Evidence upload failed");
@@ -577,12 +660,14 @@ export default function CampaignDetail({ wallet }: DetailProps) {
       toast.loading("Submitting on-chain...", { id: "submit" });
       const contract = new ethers.Contract(address, CAMPAIGN_ABI, wallet.signer);
       const tx = await contract.submitMilestone(submitMilestoneId, cids[0]);
-      await tx.wait();
+      await waitForTransactionWithTimeout(tx, CHAIN_CONFIRMATION_TIMEOUT_MS);
 
       // 3. Trigger AI verification
       toast.loading("Running AI verification...", { id: "submit" });
       const milestone = milestones.find((m) => m.id === submitMilestoneId);
-      const verifyRes = await fetch(`${API_BASE}/verify-milestone`, {
+      const verifyRes = await fetchWithTimeout(
+        `${API_BASE}/verify-milestone`,
+        {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -596,7 +681,9 @@ export default function CampaignDetail({ wallet }: DetailProps) {
           campaignTitle: campaign?.title || "VeraFund Campaign",
           milestoneTitle: milestone?.title || `Milestone ${submitMilestoneId}`,
         }),
-      });
+        },
+        VERIFY_TIMEOUT_MS
+      );
       const verdict = (await verifyRes.json().catch(() => null)) as AIVerdict | null;
       if (!verifyRes.ok) {
         throw new Error((verdict as { error?: string } | null)?.error || "Verification failed");
@@ -1857,8 +1944,16 @@ export default function CampaignDetail({ wallet }: DetailProps) {
                   <input
                     type="file"
                     multiple
-                    accept="image/*"
+                    accept="image/jpeg,image/png,image/webp"
                     onChange={(e) => {
+                      const validation = validateSelectedImages(e.target.files);
+                      if (!validation.ok) {
+                        toast.error(validation.error, { id: "submit" });
+                        setSubmitFiles(null);
+                        e.target.value = "";
+                        return;
+                      }
+
                       setSubmitFiles(e.target.files);
                       setSubmitMilestoneId(m.id);
                     }}

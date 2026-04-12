@@ -11,8 +11,6 @@ const ALLOWED_IMAGE_MIME_TYPES = new Set([
   "image/jpeg",
   "image/png",
   "image/webp",
-  "image/heic",
-  "image/heif",
 ]);
 
 function isAllowedImageMimeType(mimeType) {
@@ -27,7 +25,7 @@ function parseDataUrlImage(dataUrl) {
 
   const mimeType = String(match[1] || "").toLowerCase();
   if (!isAllowedImageMimeType(mimeType)) {
-    throw new Error("Only JPEG, PNG, WEBP, and HEIC images are allowed.");
+    throw new Error("Only JPEG, PNG, and WEBP images are allowed.");
   }
 
   const buffer = Buffer.from(match[2], "base64");
@@ -77,7 +75,7 @@ const upload = multer({
   },
   fileFilter: (_req, file, callback) => {
     if (!isAllowedImageMimeType(file.mimetype)) {
-      callback(new Error("Only JPEG, PNG, WEBP, and HEIC images are allowed."));
+      callback(new Error("Only JPEG, PNG, and WEBP images are allowed."));
       return;
     }
 

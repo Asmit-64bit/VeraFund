@@ -15,8 +15,6 @@ const ALLOWED_IMAGE_MIME_TYPES = new Set([
   "image/jpeg",
   "image/png",
   "image/webp",
-  "image/heic",
-  "image/heif",
 ]);
 
 function isAllowedImageMimeType(mimeType) {
@@ -31,7 +29,7 @@ const upload = multer({
   },
   fileFilter: (_req, file, callback) => {
     if (!isAllowedImageMimeType(file.mimetype)) {
-      callback(new Error("Only JPEG, PNG, WEBP, and HEIC images are allowed."));
+      callback(new Error("Only JPEG, PNG, and WEBP images are allowed."));
       return;
     }
 
@@ -75,7 +73,7 @@ router.post("/upload-evidence", upload.array("files", 10), async (req, res) => {
       );
       evidenceMetadata.__fileBuffer = await fs.promises.readFile(file.path);
       await enrichAuthenticityChecks(evidenceMetadata);
-      const readableStream = fs.createReadStream(file.path);
+        const readableStream = fs.createReadStream(file.path);
       const result = await pinata.pinFileToIPFS(readableStream, {
         pinataMetadata: {
           name: file.originalname,

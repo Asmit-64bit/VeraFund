@@ -8,8 +8,6 @@ const ALLOWED_IMAGE_MIME_TYPES = new Set([
   "image/jpeg",
   "image/png",
   "image/webp",
-  "image/heic",
-  "image/heif",
 ]);
 
 function isAllowedImageMimeType(mimeType) {
@@ -24,7 +22,7 @@ function parseDataUrlImage(dataUrl) {
 
   const mimeType = String(match[1] || "").toLowerCase();
   if (!isAllowedImageMimeType(mimeType)) {
-    throw new Error("Only JPEG, PNG, WEBP, and HEIC images are allowed.");
+    throw new Error("Only JPEG, PNG, and WEBP images are allowed.");
   }
 
   const buffer = Buffer.from(match[2], "base64");
@@ -150,7 +148,7 @@ module.exports = async function handler(req, res) {
       if (!isAllowedImageMimeType(file.mimetype) || file.size > MAX_IMAGE_SIZE_BYTES) {
         cleanupFiles(uploadedFiles);
         return res.status(400).json({
-          error: "Only JPEG, PNG, WEBP, and HEIC images up to 10 MB are allowed.",
+          error: "Only JPEG, PNG, and WEBP images up to 10 MB are allowed.",
         });
       }
     }

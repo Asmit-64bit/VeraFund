@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { Link } from "react-router-dom";
 import { ethers } from "ethers";
 import toast from "react-hot-toast";
@@ -221,6 +221,7 @@ export default function Profile({ wallet }: ProfileProps) {
   const [creatorProfile, setCreatorProfile] = useState<CreatorProfile>(emptyCreatorProfile);
   const [causesInput, setCausesInput] = useState("");
   const [organizationsInput, setOrganizationsInput] = useState("");
+  const hydratedProfileRef = useRef(false);
 
   useEffect(() => {
     const storedProfile = loadCreatorProfileDraft(wallet.account);
@@ -228,6 +229,7 @@ export default function Profile({ wallet }: ProfileProps) {
     setCreatorProfile(normalized);
     setCausesInput(joinListToMultiline(normalized.causes));
     setOrganizationsInput(joinListToMultiline(normalized.associatedOrganizations));
+    hydratedProfileRef.current = Boolean(storedProfile);
   }, [wallet.account]);
 
   const addr = wallet.account?.toLowerCase() || "";
@@ -239,6 +241,38 @@ export default function Profile({ wallet }: ProfileProps) {
     () => campaigns.filter((campaign) => (campaign.userDonation || 0n) > 0n),
     [campaigns]
   );
+  const latestPublishedCreatorProfile = useMemo(() => {
+    for (const campaign of createdCampaigns) {
+      const publishedProfile = campaign.profile?.creatorProfile;
+      if (publishedProfile) {
+        return sanitizeCreatorProfile(publishedProfile);
+      }
+    }
+
+    return null;
+  }, [createdCampaigns]);
+
+  useEffect(() => {
+    if (hydratedProfileRef.current) return;
+    if (!latestPublishedCreatorProfile) return;
+
+    setCreatorProfile(latestPublishedCreatorProfile);
+    setCausesInput(joinListToMultiline(latestPublishedCreatorProfile.causes));
+    setOrganizationsInput(joinListToMultiline(latestPublishedCreatorProfile.associatedOrganizations));
+    hydratedProfileRef.current = true;
+  }, [latestPublishedCreatorProfile]);
+
+  useEffect(() => {
+    if (!wallet.account || !hydratedProfileRef.current) return;
+
+    const sanitized = sanitizeCreatorProfile({
+      ...creatorProfile,
+      causes: splitLinesToList(causesInput),
+      associatedOrganizations: splitLinesToList(organizationsInput),
+    });
+
+    trySaveCreatorProfileDraft(wallet.account, sanitized);
+  }, [wallet.account, creatorProfile, causesInput, organizationsInput]);
 
   useEffect(() => {
     let cancelled = false;
@@ -403,10 +437,10 @@ export default function Profile({ wallet }: ProfileProps) {
         <div className="creator-profile-shell">
           <div className="creator-profile-preview">
             <div className="creator-profile-eyebrow">Public donor view</div>
-            {creatorProfile.profileImageDataUrl ? (
+            {creatorProfile.profileImageDataUrl || creatorProfile.profileImageUrl ? (
               <img
                 className="creator-profile-avatar"
-                src={creatorProfile.profileImageDataUrl}
+                src={creatorProfile.profileImageDataUrl || creatorProfile.profileImageUrl || undefined}
                 alt={creatorProfile.displayName || "Organizer"}
               />
             ) : null}

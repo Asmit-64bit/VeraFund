@@ -27,6 +27,8 @@ interface MilestoneInput {
 }
 
 const STEPS = ["Basic Info", "Bootstrap %", "Milestones", "Review & Deploy"];
+const MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024;
+const ALLOWED_WEB_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 const emptyMilestone = (): MilestoneInput => ({
   title: "",
@@ -72,6 +74,31 @@ const readFileAsDataUrl = (file: File) =>
     reader.onerror = () => reject(new Error("Failed to read image"));
     reader.readAsDataURL(file);
   });
+
+function validateCampaignImages(files: File[]) {
+  if (files.length === 0) {
+    return { ok: true as const };
+  }
+
+  for (const file of files) {
+    if (!ALLOWED_WEB_IMAGE_TYPES.has(file.type)) {
+      return {
+        ok: false as const,
+        error:
+          "Please upload JPG, PNG, or WEBP images. HEIC and HEIF files are not supported reliably across the site.",
+      };
+    }
+
+    if (file.size > MAX_UPLOAD_SIZE_BYTES) {
+      return {
+        ok: false as const,
+        error: "Each campaign image must be 10 MB or smaller.",
+      };
+    }
+  }
+
+  return { ok: true as const };
+}
 
 export default function CreateCampaign({ wallet }: CreateProps) {
   const navigate = useNavigate();
@@ -505,9 +532,18 @@ export default function CreateCampaign({ wallet }: CreateProps) {
               <input
                 className="neo-input"
                 type="file"
-                accept="image/*"
+                accept="image/jpeg,image/png,image/webp"
                 onChange={async (e) => {
                   const nextFile = e.target.files?.[0] || null;
+                  const validation = validateCampaignImages(nextFile ? [nextFile] : []);
+                  if (!validation.ok) {
+                    toast.error(validation.error);
+                    setCoverImage(null);
+                    setCoverImageDataUrl(null);
+                    e.target.value = "";
+                    return;
+                  }
+
                   setCoverImage(nextFile);
 
                   if (!nextFile) {
@@ -543,10 +579,19 @@ export default function CreateCampaign({ wallet }: CreateProps) {
             <input
               className="neo-input"
               type="file"
-              accept="image/*"
+              accept="image/jpeg,image/png,image/webp"
               multiple
               onChange={async (e) => {
                 const files = Array.from(e.target.files || []);
+                const validation = validateCampaignImages(files);
+                if (!validation.ok) {
+                  toast.error(validation.error);
+                  setGalleryImages([]);
+                  setGalleryPreviewUrls([]);
+                  e.target.value = "";
+                  return;
+                }
+
                 setGalleryImages(files);
 
                 if (files.length === 0) {
