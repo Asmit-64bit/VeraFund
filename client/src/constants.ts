@@ -1,9 +1,19 @@
 // Contract addresses — deployed on Sepolia
-export const FACTORY_ADDRESS = "0xC37cb2Eb3ef384906F8Cc48bCa889449B1E7F83D";
-export const DONOR_NFT_ADDRESS = "0x7ec109b7931cdc7a3869a033E4fb5cF9a934670c";
+export const FACTORY_ADDRESS = "0x6A837595E2592d699d48eB2DAcF47Df9493035d2";
+export const LEGACY_FACTORY_ADDRESSES: string[] = [];
+export const READONLY_FACTORY_ADDRESSES = Array.from(
+  new Set([FACTORY_ADDRESS, ...LEGACY_FACTORY_ADDRESSES])
+);
+export const DONOR_NFT_ADDRESS = "0x25c992175fE2A0Cc31F381f0C6894B3376353BCd";
 
 // Backend API
-export const API_BASE = "http://localhost:3001";
+export const API_BASE = import.meta.env.VITE_API_BASE || "/api";
+export const READONLY_SEPOLIA_RPCS = [
+  import.meta.env.VITE_SEPOLIA_RPC_URL || "https://gateway.tenderly.co/public/sepolia",
+  "https://1rpc.io/sepolia",
+  "https://ethereum-sepolia-rpc.publicnode.com",
+] as const;
+export const READONLY_SEPOLIA_RPC = READONLY_SEPOLIA_RPCS[0];
 
 // Chain config
 export const SEPOLIA_CHAIN_ID = 11155111;
@@ -23,6 +33,9 @@ export const CAMPAIGN_ABI = [
   "function submitMilestone(uint256 milestoneId, string ipfsHash) external",
   "function vote(uint256 milestoneId, bool approve) external",
   "function refund() external",
+  "function markCampaignStale() external",
+  "function isStale() external view returns (bool)",
+  "function getRefundAmount(address donor) external view returns (uint256)",
   "function getCampaign() external view returns (tuple(address ngoAddress, string title, string description, string ngoName, uint256 goalAmount, uint256 raisedAmount, uint256 campaignDeadline, uint256 bootstrapPercent, uint8 status, uint256 milestoneCount))",
   "function getMilestone(uint256 milestoneId) external view returns (tuple(string title, string description, uint256 fundPercent, uint256 deadline, uint8 status, string ipfsHash, uint256 votingDeadline, uint256 votesFor, uint256 votesAgainst, bool resolvedByAI, uint8 aiScore))",
   "function getAllMilestones() external view returns (tuple(string title, string description, uint256 fundPercent, uint256 deadline, uint8 status, string ipfsHash, uint256 votingDeadline, uint256 votesFor, uint256 votesAgainst, bool resolvedByAI, uint8 aiScore)[])",
@@ -39,9 +52,12 @@ export const CAMPAIGN_ABI = [
   "event DonationReceived(address indexed donor, uint256 amount)",
   "event BootstrapReleased(uint256 amount)",
   "event MilestoneSubmitted(uint256 indexed milestoneId, string ipfsHash)",
+  "event VotingOpened(uint256 indexed milestoneId, uint256 votingDeadline)",
   "event VoteCast(address indexed voter, uint256 indexed milestoneId, bool approved)",
   "event FundsReleased(uint256 indexed milestoneId, uint256 amount, bool resolvedByAI)",
   "event MilestoneRejected(uint256 indexed milestoneId, bool resolvedByAI)",
+  "event RefundIssued(address indexed donor, uint256 amount)",
+  "event CampaignMarkedStale(uint256 indexed milestoneId, uint256 refundPool)",
 ] as const;
 
 export const DONOR_NFT_ABI = [
@@ -49,6 +65,9 @@ export const DONOR_NFT_ABI = [
   "function tokenData(uint256 tokenId) external view returns (tuple(address campaignAddress, address donor, uint256 amountDonated, uint256 timestamp))",
   "function hasDonorToken(address campaign, address donor) external view returns (bool)",
   "function donorCampaignToken(address campaign, address donor) external view returns (uint256)",
+  "function successfulCampaignsByDonor(address donor) external view returns (uint256)",
+  "function getSupporterTier(address donor) external view returns (uint8)",
+  "function tokenURI(uint256 tokenId) external view returns (string)",
 ] as const;
 
 // Status labels

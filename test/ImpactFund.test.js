@@ -11,6 +11,8 @@ describe("ImpactFund — Full Contract Suite (v2: Bootstrap + Quorum + AI)", fun
   const NGO_NAME = "WaterAid India";
   const GOAL = ethers.parseEther("1.0");
   const BOOTSTRAP_PERCENT = 5; // 5%
+  const BOOTSTRAP_AMOUNT = ethers.parseEther("0.05");
+  const MILESTONE_ONE_UNLOCK = ethers.parseEther("0.33");
   let DEADLINE;
 
   // Milestones: percentages are % of post-bootstrap (must sum to 100)
@@ -60,6 +62,25 @@ describe("ImpactFund — Full Contract Suite (v2: Bootstrap + Quorum + AI)", fun
       await expect(
         donorNFT.connect(donor1).mint(donor1.address, deployer.address, ethers.parseEther("0.1"))
       ).to.be.revertedWith("DonorNFT: not authorized");
+    });
+
+    it("should start donors at Bronze tier", async function () {
+      const milestones = milestoneInputs(DEADLINE);
+      await factory.connect(ngo).createCampaign(
+        TITLE, DESCRIPTION, NGO_NAME, BOOTSTRAP_PERCENT, milestones, GOAL, DEADLINE
+      );
+      const allCampaigns = await factory.getAllCampaigns();
+      const campaign = await ethers.getContractAt("ImpactFundCampaign", allCampaigns[0]);
+
+      await campaign.connect(donor1).donate({ value: ethers.parseEther("0.1") });
+      const tokenId = await donorNFT.donorCampaignToken(await campaign.getAddress(), donor1.address);
+
+      expect(await donorNFT.getSupporterTier(donor1.address)).to.equal(0);
+      const tokenUri = await donorNFT.tokenURI(tokenId);
+      const encodedMetadata = tokenUri.replace("data:application/json;base64,", "");
+      const metadata = JSON.parse(Buffer.from(encodedMetadata, "base64").toString("utf8"));
+
+      expect(metadata.attributes.find((attribute) => attribute.trait_type === "Supporter Tier")?.value).to.equal("Bronze");
     });
   });
 
@@ -127,6 +148,38 @@ describe("ImpactFund — Full Contract Suite (v2: Bootstrap + Quorum + AI)", fun
         factory.connect(ngo).createCampaign(TITLE, DESCRIPTION, NGO_NAME, 16, milestones, GOAL, DEADLINE)
       ).to.be.revertedWith("Factory: bootstrap must be 1-15%");
     });
+
+    it("should reject fundraising deadlines in the past", async function () {
+      const block = await ethers.provider.getBlock("latest");
+      const pastDeadline = block.timestamp - 60;
+      const milestones = milestoneInputs(DEADLINE);
+
+      await expect(
+        factory.connect(ngo).createCampaign(TITLE, DESCRIPTION, NGO_NAME, BOOTSTRAP_PERCENT, milestones, GOAL, pastDeadline)
+      ).to.be.revertedWith("Factory: fundraising deadline must be in the future");
+    });
+
+    it("should reject milestone deadlines before fundraising deadline", async function () {
+      const invalidMilestones = [
+        { title: "A", description: "a", fundPercent: 50, deadline: DEADLINE - 10 },
+        { title: "B", description: "b", fundPercent: 50, deadline: DEADLINE + 172800 },
+      ];
+
+      await expect(
+        factory.connect(ngo).createCampaign(TITLE, DESCRIPTION, NGO_NAME, BOOTSTRAP_PERCENT, invalidMilestones, GOAL, DEADLINE)
+      ).to.be.revertedWith("Factory: milestone deadline must be after fundraising deadline");
+    });
+
+    it("should reject milestone deadlines that are not increasing", async function () {
+      const invalidMilestones = [
+        { title: "A", description: "a", fundPercent: 50, deadline: DEADLINE + 172800 },
+        { title: "B", description: "b", fundPercent: 50, deadline: DEADLINE + 86400 },
+      ];
+
+      await expect(
+        factory.connect(ngo).createCampaign(TITLE, DESCRIPTION, NGO_NAME, BOOTSTRAP_PERCENT, invalidMilestones, GOAL, DEADLINE)
+      ).to.be.revertedWith("Factory: milestone deadlines must be increasing");
+    });
   });
 
   // ════════════════════════════════════════════
@@ -167,15 +220,20 @@ describe("ImpactFund — Full Contract Suite (v2: Bootstrap + Quorum + AI)", fun
       });
 
       it("should have correct fund percentages (converted from post-bootstrap)", async function () {
-        // User milestones: 30%, 40%, 30% of post-bootstrap (95%)
-        // Actual: 30*95/100=28.5→28, 40*95/100=38, 30*95/100=28.5→28
-        // Total: bootstrap(5) + 28 + 38 + 28 = 99 (1% rounding loss, acceptable)
+        // User milestones are converted to shares of the total goal.
+        // The final milestone absorbs the rounding remainder so all tranches add to 100%.
         const all = await campaign.getAllMilestones();
         expect(all[0].fundPercent).to.equal(5);  // bootstrap
-        // Due to integer division: 30*95/100 = 28, 40*95/100 = 38, 30*95/100 = 28
         expect(all[1].fundPercent).to.equal(28);
         expect(all[2].fundPercent).to.equal(38);
-        expect(all[3].fundPercent).to.equal(28);
+        expect(all[3].fundPercent).to.equal(29);
+      });
+
+      it("should expose cumulative unlock thresholds for each milestone", async function () {
+        expect(await campaign.getMilestoneUnlockAmount(0)).to.equal(BOOTSTRAP_AMOUNT);
+        expect(await campaign.getMilestoneUnlockAmount(1)).to.equal(MILESTONE_ONE_UNLOCK);
+        expect(await campaign.getMilestoneUnlockAmount(2)).to.equal(ethers.parseEther("0.71"));
+        expect(await campaign.getMilestoneUnlockAmount(3)).to.equal(GOAL);
       });
     });
 
@@ -224,52 +282,54 @@ describe("ImpactFund — Full Contract Suite (v2: Bootstrap + Quorum + AI)", fun
           campaign.connect(donor1).donate({ value: 0 })
         ).to.be.revertedWith("Campaign: donation must be > 0");
       });
+
+      it("should reject donations from the campaign NGO", async function () {
+        await expect(
+          campaign.connect(ngo).donate({ value: ethers.parseEther("0.1") })
+        ).to.be.revertedWith("Campaign: NGO cannot donate to own campaign");
+      });
     });
 
     // ── Bootstrap Grant ──
 
     describe("Bootstrap Grant", function () {
-      it("should release bootstrap when goal is exactly met", async function () {
+      it("should release bootstrap as soon as the bootstrap tranche is fully funded", async function () {
         const ngoBefore = await ethers.provider.getBalance(ngo.address);
 
         await expect(
-          campaign.connect(donor1).donate({ value: GOAL })
+          campaign.connect(donor1).donate({ value: BOOTSTRAP_AMOUNT })
         ).to.emit(campaign, "BootstrapReleased")
-          .withArgs(ethers.parseEther("0.05")); // 5% of 1 ETH
+          .withArgs(BOOTSTRAP_AMOUNT);
 
         const ngoAfter = await ethers.provider.getBalance(ngo.address);
-        expect(ngoAfter - ngoBefore).to.equal(ethers.parseEther("0.05"));
+        expect(ngoAfter - ngoBefore).to.equal(BOOTSTRAP_AMOUNT);
 
         const info = await campaign.getCampaign();
         expect(info.status).to.equal(1); // Active
       });
 
-      it("should release bootstrap when goal is exceeded", async function () {
+      it("should reject donations that exceed the goal", async function () {
         await campaign.connect(donor1).donate({ value: ethers.parseEther("0.5") });
-        // Not yet at goal
-        let info = await campaign.getCampaign();
-        expect(info.status).to.equal(0); // Still Fundraising
 
         await expect(
           campaign.connect(donor2).donate({ value: ethers.parseEther("0.6") })
-        ).to.emit(campaign, "BootstrapReleased");
-
-        info = await campaign.getCampaign();
-        expect(info.status).to.equal(1); // Now Active
+        ).to.be.revertedWith("Campaign: donation exceeds goal");
       });
 
       it("should mark milestone 0 as Approved after bootstrap", async function () {
-        await campaign.connect(donor1).donate({ value: GOAL });
+        await campaign.connect(donor1).donate({ value: BOOTSTRAP_AMOUNT });
         const m0 = await campaign.getMilestone(0);
         expect(m0.status).to.equal(3); // Approved
       });
 
-      it("should NOT release bootstrap twice", async function () {
-        await campaign.connect(donor1).donate({ value: GOAL });
-        // Campaign is now Active, can't donate more
+      it("should keep accepting donations after bootstrap is released", async function () {
+        await campaign.connect(donor1).donate({ value: BOOTSTRAP_AMOUNT });
         await expect(
           campaign.connect(donor2).donate({ value: ethers.parseEther("0.1") })
-        ).to.be.revertedWith("Campaign: invalid status for this action");
+        ).to.emit(campaign, "DonationReceived")
+          .withArgs(donor2.address, ethers.parseEther("0.1"));
+
+        expect(await campaign.raisedAmount()).to.equal(ethers.parseEther("0.15"));
       });
     });
 
@@ -277,7 +337,7 @@ describe("ImpactFund — Full Contract Suite (v2: Bootstrap + Quorum + AI)", fun
 
     describe("Milestone Submission", function () {
       beforeEach(async function () {
-        await campaign.connect(donor1).donate({ value: GOAL });
+        await campaign.connect(donor1).donate({ value: MILESTONE_ONE_UNLOCK });
       });
 
       it("should let NGO submit milestone evidence and open voting window", async function () {
@@ -307,6 +367,27 @@ describe("ImpactFund — Full Contract Suite (v2: Bootstrap + Quorum + AI)", fun
         await expect(
           campaign.connect(ngo).submitMilestone(1, "")
         ).to.be.revertedWith("Campaign: empty IPFS hash");
+      });
+
+      it("should reject milestone submission before its cumulative funding target is reached", async function () {
+        const milestones = milestoneInputs(DEADLINE);
+        await factory.connect(ngo).createCampaign(
+          `${TITLE} 2`,
+          DESCRIPTION,
+          NGO_NAME,
+          BOOTSTRAP_PERCENT,
+          milestones,
+          GOAL,
+          DEADLINE
+        );
+        const allCampaigns = await factory.getAllCampaigns();
+        const secondCampaign = await ethers.getContractAt("ImpactFundCampaign", allCampaigns[1]);
+
+        await secondCampaign.connect(donor1).donate({ value: BOOTSTRAP_AMOUNT });
+
+        await expect(
+          secondCampaign.connect(ngo).submitMilestone(1, "QmTestHash123")
+        ).to.be.revertedWith("Campaign: milestone funding not unlocked");
       });
     });
 
@@ -408,6 +489,23 @@ describe("ImpactFund — Full Contract Suite (v2: Bootstrap + Quorum + AI)", fun
         await expect(
           campaign.resolveVote(1)
         ).to.be.revertedWith("Campaign: voting still open");
+      });
+
+      it("should resolve early once 100% of donor weight has voted", async function () {
+        await campaign.connect(donor1).vote(1, true);
+        await campaign.connect(donor2).vote(1, true);
+
+        const ngoBefore = await ethers.provider.getBalance(ngo.address);
+
+        await expect(campaign.resolveVote(1))
+          .to.emit(campaign, "FundsReleased")
+          .withArgs(1, ethers.parseEther("0.28"), false);
+
+        const ngoAfter = await ethers.provider.getBalance(ngo.address);
+        expect(ngoAfter - ngoBefore).to.equal(ethers.parseEther("0.28"));
+
+        const m = await campaign.getMilestone(1);
+        expect(m.status).to.equal(3);
       });
 
       it("should approve when quorum met and 60%+ approve", async function () {
@@ -523,12 +621,32 @@ describe("ImpactFund — Full Contract Suite (v2: Bootstrap + Quorum + AI)", fun
         const info = await campaign.getCampaign();
         expect(info.status).to.equal(2); // Completed
       });
+
+      it("should upgrade donors to Silver when a funded campaign completes", async function () {
+        await campaign.connect(donor1).vote(1, true);
+        await campaign.connect(donor2).vote(1, true);
+        await ethers.provider.send("evm_increaseTime", [7 * 86400 + 1]);
+        await ethers.provider.send("evm_mine");
+        await campaign.resolveVote(1);
+
+        for (let i = 2; i <= 3; i++) {
+          await campaign.connect(ngo).submitMilestone(i, `QmHash${i}`);
+          await campaign.connect(donor1).vote(i, true);
+          await campaign.connect(donor2).vote(i, true);
+          await ethers.provider.send("evm_increaseTime", [7 * 86400 + 1]);
+          await ethers.provider.send("evm_mine");
+          await campaign.resolveVote(i);
+        }
+
+        expect(await donorNFT.successfulCampaignsByDonor(donor1.address)).to.equal(1);
+        expect(await donorNFT.getSupporterTier(donor1.address)).to.equal(1);
+      });
     });
 
     // ── Refund ──
 
     describe("Refund", function () {
-      it("should allow refund when fundraising deadline passes without hitting goal", async function () {
+      it("should allow a proportional refund of the remaining locked balance when fundraising ends short", async function () {
         await campaign.connect(donor1).donate({ value: ethers.parseEther("0.3") });
 
         await ethers.provider.send("evm_increaseTime", [605000]);
@@ -540,7 +658,7 @@ describe("ImpactFund — Full Contract Suite (v2: Bootstrap + Quorum + AI)", fun
         const gasUsed = receipt.gasUsed * receipt.gasPrice;
 
         const balAfter = await ethers.provider.getBalance(donor1.address);
-        expect(balAfter + gasUsed - balBefore).to.equal(ethers.parseEther("0.3"));
+        expect(balAfter + gasUsed - balBefore).to.equal(ethers.parseEther("0.25"));
       });
 
       it("should prevent double refund", async function () {
@@ -560,6 +678,65 @@ describe("ImpactFund — Full Contract Suite (v2: Bootstrap + Quorum + AI)", fun
         await expect(
           campaign.connect(donor1).refund()
         ).to.be.revertedWith("Campaign: refund not available");
+      });
+
+      it("should let anyone mark a campaign stale after 60 days past an unresolved milestone deadline", async function () {
+        await campaign.connect(donor1).donate({ value: ethers.parseEther("0.6") });
+        await campaign.connect(donor2).donate({ value: ethers.parseEther("0.4") });
+
+        const milestoneOne = await campaign.getMilestone(1);
+        await ethers.provider.send("evm_setNextBlockTimestamp", [Number(milestoneOne.deadline) + 60 * 86400 + 1]);
+        await ethers.provider.send("evm_mine");
+
+        await expect(campaign.connect(donor3).markCampaignStale())
+          .to.emit(campaign, "CampaignMarkedStale")
+          .withArgs(1, ethers.parseEther("0.95"));
+
+        const info = await campaign.getCampaign();
+        expect(info.status).to.equal(3); // Cancelled
+        expect(await campaign.staleRefundPool()).to.equal(ethers.parseEther("0.95"));
+      });
+
+      it("should refund donors proportionally to remaining locked funds after a stale campaign", async function () {
+        await campaign.connect(donor1).donate({ value: ethers.parseEther("0.6") });
+        await campaign.connect(donor2).donate({ value: ethers.parseEther("0.4") });
+
+        await campaign.connect(ngo).submitMilestone(1, "QmTestHash123");
+        await campaign.connect(donor1).vote(1, true);
+        await campaign.connect(donor2).vote(1, true);
+        await ethers.provider.send("evm_increaseTime", [7 * 86400 + 1]);
+        await ethers.provider.send("evm_mine");
+        await campaign.resolveVote(1);
+
+        const milestoneTwo = await campaign.getMilestone(2);
+        await ethers.provider.send("evm_setNextBlockTimestamp", [Number(milestoneTwo.deadline) + 60 * 86400 + 1]);
+        await ethers.provider.send("evm_mine");
+        await campaign.markCampaignStale();
+
+        expect(await campaign.getRefundAmount(donor1.address)).to.equal(ethers.parseEther("0.402"));
+        expect(await campaign.getRefundAmount(donor2.address)).to.equal(ethers.parseEther("0.268"));
+
+        await expect(() => campaign.connect(donor1).refund()).to.changeEtherBalances(
+          [donor1, campaign],
+          [ethers.parseEther("0.402"), -ethers.parseEther("0.402")]
+        );
+
+        await expect(() => campaign.connect(donor2).refund()).to.changeEtherBalances(
+          [donor2, campaign],
+          [ethers.parseEther("0.268"), -ethers.parseEther("0.268")]
+        );
+      });
+
+      it("should reject stale marking before the inactivity window has passed", async function () {
+        await campaign.connect(donor1).donate({ value: GOAL });
+
+        const milestoneOne = await campaign.getMilestone(1);
+        await ethers.provider.send("evm_setNextBlockTimestamp", [Number(milestoneOne.deadline) + 30 * 86400]);
+        await ethers.provider.send("evm_mine");
+
+        await expect(
+          campaign.markCampaignStale()
+        ).to.be.revertedWith("Campaign: stale refund not available");
       });
     });
 

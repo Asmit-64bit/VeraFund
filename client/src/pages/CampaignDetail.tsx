@@ -1,13 +1,85 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { ethers } from "ethers";
 import toast from "react-hot-toast";
+import ImpactCardShare from "../components/ImpactCardShare";
 import { useCampaign } from "../hooks/useCampaign";
-import { CAMPAIGN_ABI, CAMPAIGN_STATUS, MILESTONE_STATUS, API_BASE } from "../constants";
-import type { WalletState, MilestoneInfo } from "../types";
+import {
+  CAMPAIGN_ABI,
+  CAMPAIGN_STATUS,
+  MILESTONE_STATUS,
+  API_BASE,
+} from "../constants";
+import { getMediaProxyUrl, getSatelliteViewUrl } from "../lib/campaignProfile";
+import { normalizeCampaignCategories } from "../lib/campaigns";
+import { formatEth, formatEthLabel, formatPercent } from "../lib/format";
+import type {
+  AIVerdict,
+  AuthenticitySummary,
+  CampaignBindingSummary,
+  CampaignInfo,
+  ClaimedLocation,
+  EvidenceAIReview,
+  EvidenceUpload,
+  GeospatialReview,
+  WalletState,
+  MilestoneInfo,
+} from "../types";
 
 interface DetailProps {
   wallet: WalletState;
+}
+
+type EvidenceMetadataMap = Record<number, {
+  uploads: EvidenceUpload[];
+  claimedLocation: ClaimedLocation | null;
+  authenticity?: AuthenticitySummary;
+  geospatial?: GeospatialReview | null;
+  binding?: CampaignBindingSummary | null;
+  aiReview?: EvidenceAIReview | null;
+}>;
+
+interface AuditTrailEntry {
+  id: string;
+  title: string;
+  summary: string;
+  txHash: string;
+  blockNumber: number;
+  timestamp: number | null;
+}
+
+function getReadableAuditTrailError(message: string | null | undefined) {
+  const normalized = String(message || "");
+
+  if (
+    normalized.includes("Too Many Requests") ||
+    normalized.includes("rate limit") ||
+    normalized.includes("infura.io/dashboard") ||
+    normalized.includes("missing response for request") ||
+    normalized.includes("timed out")
+  ) {
+    return "Audit trail is temporarily unavailable because the Sepolia log provider is rate-limiting requests. Please refresh in a moment.";
+  }
+
+  return "Audit trail could not be loaded right now. Please refresh and try again.";
+}
+
+function getProgressPercentNumber(numerator: bigint, denominator: bigint) {
+  if (denominator <= 0n || numerator <= 0n) {
+    return 0;
+  }
+
+  const percentTimes100 = Number((numerator * 10000n) / denominator) / 100;
+  return Math.min(percentTimes100, 100);
+}
+
+function buildProofCode(campaignAddress: string, milestoneId: number, when = new Date()) {
+  const utcDate = when.toISOString().slice(0, 10).replace(/-/g, "");
+  const compactAddress = String(campaignAddress || "")
+    .replace(/^0x/i, "")
+    .slice(0, 6)
+    .toUpperCase();
+  return `VERA-${compactAddress}-M${milestoneId}-${utcDate}`;
 }
 
 const MILESTONE_TAG_COLORS: Record<number, string> = {
@@ -18,6 +90,139 @@ const MILESTONE_TAG_COLORS: Record<number, string> = {
   4: "neo-tag-red",      // Rejected
 };
 
+function getMilestoneUnlockPercent(milestone: MilestoneInfo, milestones: MilestoneInfo[]) {
+  return milestones
+    .slice(0, milestone.id + 1)
+    .reduce((sum, entry) => sum + entry.fundPercent, 0);
+}
+
+function getMilestoneDisplayState(
+  milestone: MilestoneInfo,
+  campaign: CampaignInfo,
+  milestones: MilestoneInfo[]
+): { label: string; tagClass: string; helperText: string | null } {
+  const usesLegacyGoalGate = campaign.fundingUnlockModel === "legacy_goal_gated";
+  const unlockPercent = getMilestoneUnlockPercent(milestone, milestones);
+  const bootstrapUnlockPercent = milestones[0]?.fundPercent ?? campaign.bootstrapPercent;
+  const fundingUnlocked =
+    campaign.goalAmount > 0n &&
+    campaign.raisedAmount * 100n >= campaign.goalAmount * BigInt(unlockPercent);
+  const previousMilestoneApproved =
+    milestone.id === 0 || milestones[milestone.id - 1]?.status === 3;
+
+  if (usesLegacyGoalGate && campaign.status === 0 && milestone.status === 0) {
+    return {
+      label: milestone.id === 0 ? "Locked until funded" : "Awaiting full funding",
+      tagClass: "neo-tag-outline",
+      helperText:
+        milestone.id === 0
+          ? "This legacy campaign releases bootstrap only once the fundraising goal reaches 100%."
+          : "This legacy campaign keeps execution milestones locked until fundraising reaches 100%.",
+    };
+  }
+
+  if (milestone.status === 0 && milestone.id === 0 && !campaign.bootstrapReleased) {
+    return {
+      label: `Locked until ${unlockPercent}% funded`,
+      tagClass: "neo-tag-outline",
+      helperText:
+        `Bootstrap is a ${milestone.fundPercent}% tranche and releases as soon as total donations reach ${unlockPercent}% of the goal.`,
+    };
+  }
+
+  if (milestone.status === 0 && milestone.id > 0 && !campaign.bootstrapReleased) {
+    return {
+      label: "Waiting for bootstrap release",
+      tagClass: "neo-tag-outline",
+      helperText:
+        `This milestone can open after the bootstrap tranche is funded at ${bootstrapUnlockPercent}% of the goal.`,
+    };
+  }
+
+  if (milestone.status === 0 && milestone.id > 0 && !previousMilestoneApproved) {
+    return {
+      label: `Waiting for Milestone ${milestone.id - 1}`,
+      tagClass: "neo-tag-outline",
+      helperText:
+        `Milestone ${milestone.id} opens only after Milestone ${milestone.id - 1} is approved.`,
+    };
+  }
+
+  if (milestone.status === 0 && milestone.id > 0 && !fundingUnlocked) {
+    return {
+      label: `Locked until ${unlockPercent}% funded`,
+      tagClass: "neo-tag-outline",
+      helperText:
+        `This milestone is a ${milestone.fundPercent}% tranche and opens once total funding reaches ${unlockPercent}% of the campaign goal.`,
+    };
+  }
+
+  if (milestone.status === 0 && milestone.id > 0) {
+    return {
+      label: "Ready for submission",
+      tagClass: "neo-tag-blue",
+      helperText:
+        "Funding for this milestone is unlocked. The organiser can now submit evidence for review.",
+    };
+  }
+
+  return {
+    label: MILESTONE_STATUS[milestone.status],
+    tagClass: MILESTONE_TAG_COLORS[milestone.status] || "neo-tag-yellow",
+    helperText: null,
+  };
+}
+
+function isMilestoneReadyForSubmission(
+  milestone: MilestoneInfo,
+  campaign: CampaignInfo,
+  milestones: MilestoneInfo[]
+) {
+  if (campaign.fundingUnlockModel === "legacy_goal_gated") {
+    return milestone.id > 0 && milestone.status === 0 && campaign.status === 1;
+  }
+
+  if (milestone.id === 0 || milestone.status !== 0 || !campaign.bootstrapReleased) {
+    return false;
+  }
+
+  const unlockPercent = milestones
+    .slice(0, milestone.id + 1)
+    .reduce((sum, entry) => sum + entry.fundPercent, 0);
+  const fundingUnlocked =
+    campaign.goalAmount > 0n &&
+    campaign.raisedAmount * 100n >= campaign.goalAmount * BigInt(unlockPercent);
+  const previousMilestoneApproved = milestones[milestone.id - 1]?.status === 3;
+
+  return fundingUnlocked && previousMilestoneApproved;
+}
+
+function getEvidenceStorageKey(campaignAddress: string) {
+  return `verafund:evidence:${campaignAddress.toLowerCase()}`;
+}
+
+function getPrimaryIpfsUrl(cid: string) {
+  return getMediaProxyUrl(null, cid) || "#";
+}
+
+function getGeospatialTone(status?: GeospatialReview["status"] | null) {
+  if (status === "Consistent") return "neo-tag-green";
+  if (status === "Questionable") return "neo-tag-yellow";
+  if (status === "Mismatch") return "neo-tag-red";
+  return "neo-tag-blue";
+}
+
+function formatEvidenceTimestamp(value: string | null | undefined) {
+  if (!value) return "Not found in the original image metadata";
+
+  const parsedDate = new Date(value);
+  if (Number.isNaN(parsedDate.getTime())) {
+    return "Metadata timestamp could not be read";
+  }
+
+  return parsedDate.toLocaleString();
+}
+
 export default function CampaignDetail({ wallet }: DetailProps) {
   const { address } = useParams<{ address: string }>();
   const { campaign, milestones, loading, error, refetch } = useCampaign(wallet.provider, address);
@@ -25,16 +230,190 @@ export default function CampaignDetail({ wallet }: DetailProps) {
   const [donateAmount, setDonateAmount] = useState("");
   const [donating, setDonating] = useState(false);
   const [txHash, setTxHash] = useState<string | null>(null);
+  const [lastDonationWei, setLastDonationWei] = useState<bigint | null>(null);
+  const [isDonateInputHovered, setIsDonateInputHovered] = useState(false);
+  const [isDonateInputFocused, setIsDonateInputFocused] = useState(false);
 
   // Milestone submission
   const [submitMilestoneId, setSubmitMilestoneId] = useState<number | null>(null);
   const [submitFiles, setSubmitFiles] = useState<FileList | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [claimedLatitude, setClaimedLatitude] = useState("");
+  const [claimedLongitude, setClaimedLongitude] = useState("");
+  const [claimedLocationLabel, setClaimedLocationLabel] = useState("");
+  const [locating, setLocating] = useState(false);
+  const [isStale, setIsStale] = useState(false);
+  const [refundAmount, setRefundAmount] = useState<bigint>(0n);
+  const [staleActionLoading, setStaleActionLoading] = useState(false);
+  const [evidenceMetadataByMilestone, setEvidenceMetadataByMilestone] = useState<EvidenceMetadataMap>({});
+  const [auditTrail, setAuditTrail] = useState<AuditTrailEntry[]>([]);
+  const [auditTrailLoading, setAuditTrailLoading] = useState(false);
+  const [auditTrailError, setAuditTrailError] = useState<string | null>(null);
+  const [heroBannerMissing, setHeroBannerMissing] = useState(false);
 
   // Voting
   const [votingId, setVotingId] = useState<number | null>(null);
 
   const isNGO = wallet.account?.toLowerCase() === campaign?.ngoAddress.toLowerCase();
+  const heroBannerSource =
+    campaign?.profile?.coverImageDataUrl ||
+    campaign?.profile?.coverImageUrl ||
+    campaign?.profile?.galleryImages?.[0]?.url ||
+    null;
+  const creatorAvatarSource =
+    campaign?.profile?.creatorProfile?.profileImageDataUrl ||
+    campaign?.profile?.creatorProfile?.profileImageUrl ||
+    null;
+  const remainingGoalWei = campaign ? campaign.goalAmount - campaign.raisedAmount : 0n;
+  const remainingGoalEth = campaign ? formatEth(remainingGoalWei) : "0";
+  const usesLegacyGoalGate = campaign?.fundingUnlockModel === "legacy_goal_gated";
+  const bootstrapGrantWei = campaign
+    ? (campaign.goalAmount * BigInt(campaign.bootstrapPercent)) / 100n
+    : 0n;
+  const campaignCategoryLabels = normalizeCampaignCategories(
+    campaign?.profile?.categories ?? campaign?.profile?.category
+  );
+  const currentReviewTime = useMemo(() => new Date().toLocaleString(), []);
+  const parsedDonateAmount =
+    donateAmount.trim() === ""
+      ? null
+      : (() => {
+          try {
+            return ethers.parseEther(donateAmount);
+          } catch {
+            return null;
+          }
+        })();
+  const exceedsRemainingGoal =
+    parsedDonateAmount !== null && remainingGoalWei >= 0n && parsedDonateAmount > remainingGoalWei;
+  const canDonate =
+    !donating &&
+    parsedDonateAmount !== null &&
+    parsedDonateAmount > 0n &&
+    !exceedsRemainingGoal;
+
+  useEffect(() => {
+    if (!address || typeof window === "undefined") return;
+
+    try {
+      const stored = window.localStorage.getItem(getEvidenceStorageKey(address));
+      if (!stored) return;
+      const parsed = JSON.parse(stored) as EvidenceMetadataMap;
+      setEvidenceMetadataByMilestone(parsed);
+    } catch {
+      // Ignore malformed local evidence cache.
+    }
+  }, [address]);
+
+  useEffect(() => {
+    if (!address || typeof window === "undefined") return;
+
+    try {
+      window.localStorage.setItem(
+        getEvidenceStorageKey(address),
+        JSON.stringify(evidenceMetadataByMilestone)
+      );
+    } catch {
+      // Ignore storage quota errors.
+    }
+  }, [address, evidenceMetadataByMilestone]);
+
+  useEffect(() => {
+    async function fetchEvidenceMetadata() {
+      if (!address) return;
+
+      const candidates = milestones.filter((milestone) => milestone.id > 0 && milestone.ipfsHash);
+
+      await Promise.all(
+        candidates.map(async (milestone) => {
+          try {
+            const res = await fetch(
+              `${API_BASE}/evidence-metadata?campaignAddress=${address}&milestoneId=${milestone.id}`
+            );
+
+            if (!res.ok) return;
+            const data = await res.json();
+            setEvidenceMetadataByMilestone((prev) => {
+              const next = {
+                ...prev,
+                [milestone.id]: data,
+              };
+              return next;
+            });
+          } catch {
+            // Ignore cache misses for now.
+          }
+        })
+      );
+    }
+
+    fetchEvidenceMetadata();
+  }, [address, milestones]);
+
+  useEffect(() => {
+    setHeroBannerMissing(false);
+  }, [heroBannerSource, address]);
+
+  useEffect(() => {
+    async function fetchRefundState() {
+      if (!wallet.provider || !address) {
+        setIsStale(false);
+        setRefundAmount(0n);
+        return;
+      }
+
+      try {
+        const contract = new ethers.Contract(address, CAMPAIGN_ABI, wallet.provider);
+        const stale = await contract.isStale();
+        setIsStale(Boolean(stale));
+
+        if (wallet.account) {
+          const amount = await contract.getRefundAmount(wallet.account);
+          setRefundAmount(amount);
+        } else {
+          setRefundAmount(0n);
+        }
+      } catch {
+        setIsStale(false);
+        setRefundAmount(0n);
+      }
+    }
+
+    fetchRefundState();
+  }, [wallet.provider, wallet.account, address, campaign?.status, milestones]);
+
+  useEffect(() => {
+    async function fetchAuditTrail() {
+      if (!address) {
+        setAuditTrail([]);
+        return;
+      }
+
+      setAuditTrailLoading(true);
+      setAuditTrailError(null);
+
+      try {
+        const response = await fetch(
+          `${API_BASE}/campaign-audit?address=${encodeURIComponent(address)}`
+        );
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error(getReadableAuditTrailError(payload?.error));
+        }
+
+        setAuditTrail((payload?.entries || []) as AuditTrailEntry[]);
+      } catch (err: unknown) {
+        setAuditTrail([]);
+        setAuditTrailError(
+          getReadableAuditTrailError(err instanceof Error ? err.message : null)
+        );
+      } finally {
+        setAuditTrailLoading(false);
+      }
+    }
+
+    fetchAuditTrail();
+  }, [address, campaign?.status, milestones]);
 
   // ── Donate ──
   const handleDonate = async () => {
@@ -42,15 +421,25 @@ export default function CampaignDetail({ wallet }: DetailProps) {
     setDonating(true);
     setTxHash(null);
     try {
+      const parsedAmount = parsedDonateAmount ?? ethers.parseEther(donateAmount);
+      if (parsedAmount > remainingGoalWei) {
+        toast.error(`Donation exceeds remaining goal of ${formatEthLabel(remainingGoalWei)}`, {
+          id: "donate",
+        });
+        return;
+      }
+
       const contract = new ethers.Contract(address, CAMPAIGN_ABI, wallet.signer);
       const tx = await contract.donate({
-        value: ethers.parseEther(donateAmount),
+        value: parsedAmount,
       });
       setTxHash(tx.hash);
       toast.loading("Waiting for confirmation...", { id: "donate" });
       await tx.wait();
-      toast.success("Donation confirmed! 🎉", { id: "donate" });
+      setLastDonationWei(parsedAmount);
+      toast.success("Donation confirmed!", { id: "donate" });
       setDonateAmount("");
+
       refetch();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Donation failed", { id: "donate" });
@@ -70,11 +459,20 @@ export default function CampaignDetail({ wallet }: DetailProps) {
       for (let i = 0; i < submitFiles.length; i++) {
         formData.append("files", submitFiles[i]);
       }
+      formData.append("claimedLatitude", claimedLatitude);
+      formData.append("claimedLongitude", claimedLongitude);
+      formData.append("claimedLocationLabel", claimedLocationLabel);
+      formData.append("campaignAddress", address);
+      formData.append("milestoneId", String(submitMilestoneId));
       const uploadRes = await fetch(`${API_BASE}/upload-evidence`, {
         method: "POST",
         body: formData,
       });
-      const { cids } = await uploadRes.json();
+      if (!uploadRes.ok) {
+        const uploadError = await uploadRes.json().catch(() => null);
+        throw new Error(uploadError?.error || "Evidence upload failed");
+      }
+      const { cids, uploads, claimedLocation, proofCode } = await uploadRes.json();
 
       // 2. Submit on-chain (use first CID as the hash)
       toast.loading("Submitting on-chain...", { id: "submit" });
@@ -85,7 +483,7 @@ export default function CampaignDetail({ wallet }: DetailProps) {
       // 3. Trigger AI verification
       toast.loading("Running AI verification...", { id: "submit" });
       const milestone = milestones.find((m) => m.id === submitMilestoneId);
-      await fetch(`${API_BASE}/verify-milestone`, {
+      const verifyRes = await fetch(`${API_BASE}/verify-milestone`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -93,12 +491,41 @@ export default function CampaignDetail({ wallet }: DetailProps) {
           campaignAddress: address,
           cids,
           milestoneDescription: milestone?.description || "",
+          uploads,
+          claimedLocation,
+          proofCode,
+          campaignTitle: campaign?.title || "VeraFund Campaign",
+          milestoneTitle: milestone?.title || `Milestone ${submitMilestoneId}`,
         }),
       });
+      const verdict = (await verifyRes.json().catch(() => null)) as AIVerdict | null;
+      if (!verifyRes.ok) {
+        throw new Error((verdict as { error?: string } | null)?.error || "Verification failed");
+      }
 
-      toast.success("Milestone submitted + AI verified! ✅", { id: "submit" });
+      toast.success("Milestone submitted and verified.", { id: "submit" });
+      setEvidenceMetadataByMilestone((prev) => ({
+        ...prev,
+        [submitMilestoneId]: {
+          uploads,
+          claimedLocation,
+          authenticity: verdict?.authenticity,
+          geospatial: verdict?.geospatial || null,
+          binding: verdict?.binding || null,
+          aiReview: verdict
+            ? {
+                score: verdict.score,
+                verdict: verdict.verdict,
+                summary: verdict.summary,
+              }
+            : null,
+        },
+      }));
       setSubmitMilestoneId(null);
       setSubmitFiles(null);
+      setClaimedLatitude("");
+      setClaimedLongitude("");
+      setClaimedLocationLabel("");
       refetch();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Submission failed", { id: "submit" });
@@ -116,7 +543,7 @@ export default function CampaignDetail({ wallet }: DetailProps) {
       const tx = await contract.vote(milestoneId, approve);
       toast.loading("Submitting vote...", { id: "vote" });
       await tx.wait();
-      toast.success(approve ? "Voted Approve ✅" : "Voted Challenge ❌", { id: "vote" });
+      toast.success(approve ? "Voted to approve." : "Voted to challenge.", { id: "vote" });
       refetch();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Vote failed", { id: "vote" });
@@ -128,20 +555,95 @@ export default function CampaignDetail({ wallet }: DetailProps) {
   // ── Resolve Vote ──
   const handleResolve = async (milestoneId: number) => {
     try {
-      toast.loading("Resolving vote...", { id: "resolve" });
-      const res = await fetch(`${API_BASE}/resolve-vote`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ campaignAddress: address, milestoneId }),
-      });
-      const data = await res.json();
-      toast.success(
-        `Vote resolved: ${data.outcome}${data.resolvedByAI ? " (AI tiebreaker)" : ""}`,
-        { id: "resolve" }
-      );
+      if (!wallet.signer || !address) {
+        toast.error("Connect your wallet to resolve the vote on-chain.", { id: "resolve" });
+        return;
+      }
+
+      const contract = new ethers.Contract(address, CAMPAIGN_ABI, wallet.signer);
+      toast.loading("Submitting on-chain resolution...", { id: "resolve" });
+      const tx = await contract.resolveVote(milestoneId);
+      await tx.wait();
+      toast.success("Vote resolved on-chain.", { id: "resolve" });
       refetch();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Resolution failed", { id: "resolve" });
+    }
+  };
+
+  const handleMarkStale = async () => {
+    if (!wallet.signer || !address) return;
+    setStaleActionLoading(true);
+    try {
+      const contract = new ethers.Contract(address, CAMPAIGN_ABI, wallet.signer);
+      const tx = await contract.markCampaignStale();
+      toast.loading("Marking campaign as stale...", { id: "stale" });
+      await tx.wait();
+      toast.success("Campaign marked stale. Refunds are now available.", { id: "stale" });
+      refetch();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to mark campaign stale", { id: "stale" });
+    } finally {
+      setStaleActionLoading(false);
+    }
+  };
+
+  const handleRefund = async () => {
+    if (!wallet.signer || !address) return;
+    setStaleActionLoading(true);
+    try {
+      const contract = new ethers.Contract(address, CAMPAIGN_ABI, wallet.signer);
+      const tx = await contract.refund();
+      toast.loading("Claiming refund...", { id: "refund" });
+      await tx.wait();
+      toast.success("Refund claimed.", { id: "refund" });
+      refetch();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Refund failed", { id: "refund" });
+    } finally {
+      setStaleActionLoading(false);
+    }
+  };
+
+  const handleUseCurrentLocation = async () => {
+    if (typeof window === "undefined" || !navigator.geolocation) {
+      toast.error("Geolocation is not available in this browser.", { id: "location" });
+      return;
+    }
+
+    setLocating(true);
+
+    try {
+      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          timeout: 15000,
+          maximumAge: 0,
+        });
+      });
+
+      const latitude = position.coords.latitude.toFixed(6);
+      const longitude = position.coords.longitude.toFixed(6);
+
+      setClaimedLatitude(latitude);
+      setClaimedLongitude(longitude);
+      setClaimedLocationLabel((current) =>
+        current.trim() || `Current project site (${latitude}, ${longitude})`
+      );
+      toast.success("Current location added.", { id: "location" });
+    } catch (err: unknown) {
+      const geoError = err as GeolocationPositionError | undefined;
+      const message =
+        geoError?.code === 1
+          ? "Location permission was denied."
+          : geoError?.code === 2
+          ? "Could not determine the current location."
+          : geoError?.code === 3
+          ? "Location request timed out."
+          : "Failed to fetch the current location.";
+      toast.error(message, { id: "location" });
+    } finally {
+      setLocating(false);
     }
   };
 
@@ -149,7 +651,7 @@ export default function CampaignDetail({ wallet }: DetailProps) {
     return (
       <div className="loading-spinner">
         <div className="spinner" />
-        <p>Loading campaign from blockchain...</p>
+        <p style={{ color: 'var(--text-muted)', fontSize: 14 }}>Loading from blockchain...</p>
       </div>
     );
   }
@@ -157,29 +659,116 @@ export default function CampaignDetail({ wallet }: DetailProps) {
   if (error || !campaign) {
     return (
       <div className="page-container">
-        <div className="neo-card" style={{ background: "var(--bg-red)" }}>
+        <div className="neo-card" style={{ background: "#fca5a5" }}>
           <p><strong>Error:</strong> {error || "Campaign not found"}</p>
         </div>
       </div>
     );
   }
 
-  const goal = ethers.formatEther(campaign.goalAmount);
-  const raised = ethers.formatEther(campaign.raisedAmount);
-  const percent = campaign.goalAmount > 0n
-    ? Number((campaign.raisedAmount * 100n) / campaign.goalAmount)
-    : 0;
+  const goal = formatEth(campaign.goalAmount);
+  const raised = formatEth(campaign.raisedAmount);
+  const percent = getProgressPercentNumber(campaign.raisedAmount, campaign.goalAmount);
+  const percentLabel = formatPercent(campaign.raisedAmount, campaign.goalAmount);
   const deadline = new Date(campaign.campaignDeadline * 1000);
+  const campaignDeadlinePassed = deadline.getTime() <= Date.now();
+  const fundraisingOpen =
+    !campaignDeadlinePassed &&
+    campaign.status !== 2 &&
+    campaign.status !== 3 &&
+    remainingGoalWei > 0n;
+  const bootstrapUnlockPercent = milestones[0]?.fundPercent ?? campaign.bootstrapPercent;
+  const bootstrapUnlockWei =
+    campaign.goalAmount > 0n ? (campaign.goalAmount * BigInt(bootstrapUnlockPercent)) / 100n : 0n;
+  const bootstrapMarkerPercent = usesLegacyGoalGate ? 100 : Math.min(bootstrapUnlockPercent, 100);
+  const bootstrapMarkerEdgeClass =
+    bootstrapMarkerPercent <= 8
+      ? "is-left-edge"
+      : bootstrapMarkerPercent >= 92
+        ? "is-right-edge"
+        : "";
+  const projectedRaisedWei =
+    parsedDonateAmount !== null && parsedDonateAmount > 0n
+      ? campaign.raisedAmount + parsedDonateAmount > campaign.goalAmount
+        ? campaign.goalAmount
+        : campaign.raisedAmount + parsedDonateAmount
+      : campaign.raisedAmount;
+  const projectedPercent = getProgressPercentNumber(projectedRaisedWei, campaign.goalAmount);
+  const projectedPercentLabel = formatPercent(projectedRaisedWei, campaign.goalAmount);
+  const showDonateProjection = isDonateInputHovered || isDonateInputFocused;
+  const donationPreviewActive =
+    showDonateProjection &&
+    !isNGO &&
+    parsedDonateAmount !== null &&
+    parsedDonateAmount > 0n &&
+    !exceedsRemainingGoal;
+  const projectedExtensionPercent = Math.max(projectedPercent - percent, 0);
+  const crossesBootstrapWithPreview =
+    !campaign.bootstrapReleased &&
+    bootstrapUnlockWei > 0n &&
+    campaign.raisedAmount < bootstrapUnlockWei &&
+    projectedRaisedWei >= bootstrapUnlockWei;
+  const campaignShareUrl =
+    typeof window !== "undefined"
+      ? window.location.href
+      : `https://verafund.app/campaign/${address}`;
+  const donorShareAmount = lastDonationWei ?? campaign.userDonation ?? 0n;
+  const showDonorImpactCard = !isNGO && !!wallet.account && donorShareAmount > 0n;
+  const showOrganizerImpactCard = isNGO && campaign.status === 2;
+
+  const getEvidenceForMilestone = (milestone: MilestoneInfo) => {
+    const cached = evidenceMetadataByMilestone[milestone.id];
+    if (cached?.uploads?.length) return cached;
+    if (!milestone.ipfsHash) return null;
+
+    return {
+      uploads: [
+        {
+          cid: milestone.ipfsHash,
+          fileName: "Submitted evidence",
+          location: null,
+          comparison: null,
+          authenticity: null,
+        },
+      ],
+      claimedLocation: null,
+      authenticity: undefined,
+      geospatial: null,
+      aiReview: null,
+    };
+  };
 
   return (
     <div className="page-container">
       {/* Header */}
       <div className="detail-header">
-        <h1 className="page-title">{campaign.title}</h1>
+        <div className={`campaign-detail-hero ${heroBannerMissing || !heroBannerSource ? "is-fallback" : ""}`}>
+          {!heroBannerMissing && heroBannerSource ? (
+            <img
+              src={heroBannerSource}
+              alt={`${campaign.title} banner`}
+              className="campaign-detail-hero-image"
+              onError={(event) => {
+                event.currentTarget.style.display = "none";
+                setHeroBannerMissing(true);
+              }}
+            />
+          ) : (
+            <div className="campaign-detail-hero-fallback">No Banner</div>
+          )}
+        </div>
+        <div className="page-title-block detail-title-block">
+          <h1 className="page-title">{campaign.title}</h1>
+        </div>
         <div className="detail-meta">
           <span className={`neo-tag ${MILESTONE_TAG_COLORS[campaign.status] || "neo-tag-yellow"}`}>
             {CAMPAIGN_STATUS[campaign.status]}
           </span>
+          {campaignCategoryLabels.map((category) => (
+            <span key={category} className="neo-tag neo-tag-accent">
+              {category}
+            </span>
+          ))}
           <span className="neo-tag neo-tag-accent">
             {campaign.bootstrapPercent}% bootstrap
           </span>
@@ -196,114 +785,478 @@ export default function CampaignDetail({ wallet }: DetailProps) {
         </p>
       </div>
 
+      {campaign.profile && (
+        <div className="detail-section">
+          <h3 className="detail-section-title">Organisation Details</h3>
+          {campaign.profile.creatorProfile && (
+            <div className="creator-campaign-card">
+            <div className="creator-campaign-head">
+                {creatorAvatarSource ? (
+                  <img
+                    className="creator-campaign-avatar"
+                    src={creatorAvatarSource}
+                    alt={campaign.profile.creatorProfile.displayName || campaign.ngoName}
+                  />
+                ) : null}
+                <div>
+                  <h4>{campaign.profile.creatorProfile.displayName || campaign.ngoName}</h4>
+                  <p className="creator-campaign-meta">
+                    {campaign.profile.creatorProfile.roleTitle || "Organizer"}
+                    {campaign.profile.creatorProfile.location ? ` · ${campaign.profile.creatorProfile.location}` : ""}
+                  </p>
+                </div>
+              </div>
+              <p className="creator-campaign-copy">
+                {campaign.profile.creatorProfile.aboutMe || "No organizer introduction provided."}
+              </p>
+              {(campaign.profile.creatorProfile.causes?.length || 0) > 0 && (
+                <div className="creator-profile-pill-row">
+                  {campaign.profile.creatorProfile.causes?.map((cause) => (
+                    <span key={cause} className="profile-inline-stat">{cause}</span>
+                  ))}
+                </div>
+              )}
+              {(campaign.profile.creatorProfile.associatedOrganizations?.length || 0) > 0 && (
+                <div className="campaign-profile-panel" style={{ marginTop: 16 }}>
+                  <h4>Associations</h4>
+                  <ul className="campaign-profile-list">
+                    {campaign.profile.creatorProfile.associatedOrganizations?.map((organization) => (
+                      <li key={organization}>{organization}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <div className="campaign-profile-links" style={{ marginTop: 16 }}>
+                {campaign.profile.creatorProfile.website && <a className="tx-link" href={campaign.profile.creatorProfile.website} target="_blank" rel="noreferrer">Website</a>}
+                {campaign.profile.creatorProfile.instagram && <a className="tx-link" href={campaign.profile.creatorProfile.instagram} target="_blank" rel="noreferrer">Instagram</a>}
+                {campaign.profile.creatorProfile.facebook && <a className="tx-link" href={campaign.profile.creatorProfile.facebook} target="_blank" rel="noreferrer">Facebook</a>}
+                {campaign.profile.creatorProfile.twitter && <a className="tx-link" href={campaign.profile.creatorProfile.twitter} target="_blank" rel="noreferrer">Twitter / X</a>}
+                {campaign.profile.creatorProfile.linkedin && <a className="tx-link" href={campaign.profile.creatorProfile.linkedin} target="_blank" rel="noreferrer">LinkedIn</a>}
+              </div>
+            </div>
+          )}
+          <div className="campaign-profile-grid">
+            <div className="campaign-profile-panel">
+              <h4>About the organiser</h4>
+              <p>{campaign.profile.organizationBio || "No background provided."}</p>
+            </div>
+            <div className="campaign-profile-panel">
+              <h4>How funds will be used</h4>
+              <p>{campaign.profile.useOfFunds || "No use-of-funds note provided."}</p>
+            </div>
+            <div className="campaign-profile-panel">
+              <h4>Campaign facts</h4>
+              <ul className="campaign-profile-list">
+                <li>Beneficiary: {campaign.profile.beneficiary || "Not provided"}</li>
+                <li>Organisation type: {campaign.profile.organizationType || "Not provided"}</li>
+                <li>Founded year: {campaign.profile.foundedYear || "Not provided"}</li>
+                <li>Location: {campaign.profile.locationLabel || "Not provided"}</li>
+              </ul>
+            </div>
+            <div className="campaign-profile-panel">
+              <h4>External links</h4>
+              <div className="campaign-profile-links">
+                {campaign.profile.website && <a className="tx-link" href={campaign.profile.website} target="_blank" rel="noreferrer">Website</a>}
+                {campaign.profile.instagram && <a className="tx-link" href={campaign.profile.instagram} target="_blank" rel="noreferrer">Instagram</a>}
+                {campaign.profile.facebook && <a className="tx-link" href={campaign.profile.facebook} target="_blank" rel="noreferrer">Facebook</a>}
+                {campaign.profile.twitter && <a className="tx-link" href={campaign.profile.twitter} target="_blank" rel="noreferrer">Twitter / X</a>}
+                {campaign.profile.linkedin && <a className="tx-link" href={campaign.profile.linkedin} target="_blank" rel="noreferrer">LinkedIn</a>}
+                {(!campaign.profile.website && !campaign.profile.instagram && !campaign.profile.facebook && !campaign.profile.twitter && !campaign.profile.linkedin) && (
+                  <p>No external links provided.</p>
+                )}
+              </div>
+            </div>
+          </div>
+          {campaign.profile.proofLinks && campaign.profile.proofLinks.length > 0 && (
+            <div className="campaign-proof-links">
+              <h4>Reference material</h4>
+              {campaign.profile.proofLinks.map((link) => (
+                <a key={link} className="tx-link" href={link} target="_blank" rel="noreferrer">
+                  {link}
+                </a>
+              ))}
+            </div>
+          )}
+          {campaign.profile.galleryImages && campaign.profile.galleryImages.length > 0 && (
+            <div className="campaign-proof-links">
+              <h4>Campaign gallery</h4>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                  gap: 14,
+                }}
+              >
+                {campaign.profile.galleryImages.map((image, index) =>
+                  image.url ? (
+                    <a
+                      key={`${image.cid || image.url}-${index}`}
+                      href={image.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="evidence-image-link"
+                    >
+                      <img
+                        src={image.url}
+                        alt={image.alt || `${campaign.title} gallery image ${index + 1}`}
+                        className="evidence-image-preview"
+                        loading="lazy"
+                      />
+                    </a>
+                  ) : null
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="detail-section">
+        <h3 className="detail-section-title">Audit Trail</h3>
+        <p className="audit-trail-intro">
+          Every donation, vote, fund release, rejection, and refund event is shown here in plain language.
+        </p>
+
+        {auditTrailLoading && (
+          <div className="loading-spinner" style={{ padding: "32px 0" }}>
+            <div className="spinner" />
+          </div>
+        )}
+
+        {auditTrailError && (
+          <div className="form-error-banner">{auditTrailError}</div>
+        )}
+
+        {!auditTrailLoading && !auditTrailError && auditTrail.length === 0 && (
+          <div className="neo-card" style={{ background: "var(--bg-card)" }}>
+            No on-chain activity has been recorded for this campaign yet.
+          </div>
+        )}
+
+        {!auditTrailLoading && !auditTrailError && auditTrail.length > 0 && (
+          <div className="audit-trail-list">
+            {auditTrail.map((entry) => (
+              <div key={entry.id} className="audit-trail-item">
+                <div className="audit-trail-marker" />
+                <div className="audit-trail-content">
+                  <div className="audit-trail-header">
+                    <strong>{entry.title}</strong>
+                    <span>
+                      {entry.timestamp
+                        ? new Date(entry.timestamp * 1000).toLocaleString()
+                        : `Block ${entry.blockNumber}`}
+                    </span>
+                  </div>
+                  <p>{entry.summary}</p>
+                  <a
+                    className="tx-link"
+                    href={`https://sepolia.etherscan.io/tx/${entry.txHash}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    View transaction on Etherscan
+                  </a>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* Stats */}
       <div className="detail-stats">
         <div className="stat-card">
           <div className="stat-value">{raised}</div>
           <div className="stat-label">ETH Raised</div>
         </div>
-        <div className="stat-card" style={{ background: "var(--bg-accent)" }}>
+        <div className="stat-card stat-card-accent">
           <div className="stat-value">{goal}</div>
           <div className="stat-label">ETH Goal</div>
         </div>
-        <div className="stat-card" style={{ background: "var(--bg-blue)" }}>
-          <div className="stat-value">{percent}%</div>
+        <div className="stat-card">
+          <div className="stat-value">{percentLabel}%</div>
           <div className="stat-label">Funded</div>
         </div>
       </div>
 
       {/* Progress */}
-      <div className="neo-progress" style={{ marginBottom: 32 }}>
-        <div className="neo-progress-bar" style={{ width: `${Math.min(percent, 100)}%` }}>
-          {percent}%
+      <div className="funding-progress-shell">
+        <div className="funding-progress-summary">
+          <span>Current funding: <strong>{percentLabel}%</strong></span>
+          <span>
+            Bootstrap goal: <strong>{bootstrapMarkerPercent}%</strong>
+            {bootstrapUnlockWei > 0n ? ` (${formatEthLabel(bootstrapUnlockWei)})` : ""}
+          </span>
+          {donationPreviewActive && (
+            <span className={crossesBootstrapWithPreview ? "funding-progress-summary-hit" : ""}>
+              With this donation: <strong>{projectedPercentLabel}%</strong>
+              {crossesBootstrapWithPreview ? " · bootstrap unlocks" : ""}
+            </span>
+          )}
+        </div>
+        <div className="funding-progress-track" style={{ marginBottom: 32 }}>
+          <div className="funding-progress-fill" style={{ width: `${percent}%` }}>
+            {percentLabel}%
+          </div>
+          {donationPreviewActive && projectedExtensionPercent > 0 && (
+            <div
+              className="funding-progress-preview"
+              style={{ left: `${percent}%`, width: `${projectedExtensionPercent}%` }}
+            >
+              {projectedPercentLabel}%
+            </div>
+          )}
+          <div
+            className={`funding-progress-marker ${campaign.bootstrapReleased ? "is-reached" : ""} ${bootstrapMarkerEdgeClass}`.trim()}
+            style={{ left: `${bootstrapMarkerPercent}%` }}
+          >
+            <span className="funding-progress-marker-line" />
+            <span className="funding-progress-marker-label">
+              {campaign.bootstrapReleased ? "Bootstrap unlocked" : "Bootstrap goal"}
+            </span>
+          </div>
         </div>
       </div>
 
-      {/* Donate Box (only during Fundraising) */}
-      {campaign.status === 0 && wallet.account && (
+      {(isStale || campaign.status === 3 || refundAmount > 0n) && (
         <div className="detail-section">
-          <h3 className="detail-section-title">💰 Donate</h3>
-          <div className="donate-box">
+          <h3 className="detail-section-title">Refund Protection</h3>
+          {campaign.status === 1 && isStale && (
             <div className="donate-info">
-              ℹ️ When the goal is reached, <strong>{campaign.bootstrapPercent}%</strong> ({(Number(goal) * campaign.bootstrapPercent / 100).toFixed(4)} ETH) will be released immediately as a bootstrap grant.
+              This campaign has gone quiet for more than 60 days after a milestone deadline. Any user can mark it stale to unlock proportional refunds for donors.
             </div>
-            <div className="donate-input-row">
-              <input
-                type="number"
-                className="neo-input"
-                placeholder="Amount in ETH"
-                step="0.01"
-                min="0.001"
-                value={donateAmount}
-                onChange={(e) => setDonateAmount(e.target.value)}
-              />
+          )}
+          {campaign.status === 1 && isStale && wallet.account && (
+            <button
+              className="neo-btn neo-btn-outline"
+              onClick={handleMarkStale}
+              disabled={staleActionLoading}
+            >
+              {staleActionLoading ? "Processing..." : "Mark Campaign Stale"}
+            </button>
+          )}
+          {campaign.status === 3 && refundAmount > 0n && wallet.account && (
+            <>
+              <div className="donate-info">
+                Refund available: <strong>{formatEthLabel(refundAmount)}</strong>
+              </div>
               <button
                 className="neo-btn neo-btn-primary"
-                onClick={handleDonate}
-                disabled={donating || !donateAmount}
+                onClick={handleRefund}
+                disabled={staleActionLoading}
               >
-                {donating ? "Confirming..." : "🤝 Donate"}
+                {staleActionLoading ? "Processing..." : "Claim Refund"}
               </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {(showDonorImpactCard || showOrganizerImpactCard) && (
+        <div className="detail-section">
+          <h3 className="detail-section-title">
+            {showOrganizerImpactCard ? "Campaign Impact Card" : "Share Your Impact"}
+          </h3>
+          <div className="impact-card-stack">
+            {showDonorImpactCard && (
+              <ImpactCardShare
+                mode="donor"
+                campaignTitle={campaign.title}
+                ngoName={campaign.ngoName}
+                shareUrl={campaignShareUrl}
+                amountLabel={formatEthLabel(donorShareAmount)}
+                txHash={txHash}
+              />
+            )}
+            {showOrganizerImpactCard && (
+              <ImpactCardShare
+                mode="organizer"
+                campaignTitle={campaign.title}
+                ngoName={campaign.ngoName}
+                shareUrl={campaignShareUrl}
+              />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Donate Box */}
+      {wallet.account && fundraisingOpen && (
+      <div className="detail-section">
+        <h3 className="detail-section-title">Donate</h3>
+        <div className="donate-box">
+          <div className="donate-info">
+            {usesLegacyGoalGate ? (
+              <>
+                This legacy campaign releases the bootstrap grant only after the full goal is reached.
+                Once donations hit <strong>100%</strong>,{" "}
+                <strong>{campaign.bootstrapPercent}%</strong> ({formatEthLabel(bootstrapGrantWei)})
+                {" "}will be released immediately.
+              </>
+            ) : campaign.bootstrapReleased ? (
+              <>
+                Bootstrap has already been released. New donations now unlock the next execution
+                milestones as their cumulative funding targets are reached.
+              </>
+            ) : (
+              <>
+                Bootstrap unlock target: <strong>{bootstrapUnlockPercent}%</strong> (
+                {formatEthLabel(bootstrapUnlockWei)}). The initial operating grant releases as soon
+                as the campaign reaches that funding mark.
+              </>
+            )}
+          </div>
+          <div className="donate-info" style={{ marginTop: 10 }}>
+            Remaining to fund: <strong>{formatEthLabel(remainingGoalWei)}</strong>
+          </div>
+          {isNGO ? (
+            <div className="milestone-gate-banner" style={{ marginTop: 14, marginBottom: 0 }}>
+              <strong>Campaign owners cannot donate to their own campaign.</strong> Connect a
+              separate donor wallet if you want to test the donor flow.
             </div>
-            {donateAmount && Number(donateAmount) > 0 && (
-              <p style={{ fontSize: 14, color: "var(--text-secondary)" }}>
-                Your voting weight: <strong>{donateAmount} ETH</strong>
-              </p>
-            )}
-            {txHash && (
-              <div className="tx-confirmation tx-success">
-                <p>✅ Transaction submitted!</p>
-                <a
-                  className="tx-link"
-                  href={`https://sepolia.etherscan.io/tx/${txHash}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
+          ) : (
+            <>
+              <div className="donate-input-row" style={{ marginTop: 14 }}>
+                <input
+                  type="number"
+                  className="neo-input"
+                  placeholder="Amount in ETH"
+                  step="any"
+                  min="0"
+                  max={remainingGoalEth}
+                  value={donateAmount}
+                  onChange={(e) => setDonateAmount(e.target.value)}
+                  onMouseEnter={() => setIsDonateInputHovered(true)}
+                  onMouseLeave={() => setIsDonateInputHovered(false)}
+                  onFocus={() => setIsDonateInputFocused(true)}
+                  onBlur={() => setIsDonateInputFocused(false)}
+                />
+                <button
+                  className="neo-btn neo-btn-primary"
+                  onClick={handleDonate}
+                  disabled={!canDonate}
                 >
-                  View on Etherscan →
-                </a>
+                  {donating ? "Confirming..." : "Donate"}
+                </button>
               </div>
-            )}
+              {exceedsRemainingGoal && (
+                <p className="form-error-inline">
+                  Enter an amount up to the remaining goal.
+                </p>
+              )}
+              {parsedDonateAmount !== null && parsedDonateAmount > 0n && (
+                <p style={{ fontSize: 14, color: "var(--text-secondary)" }}>
+                  Your voting weight: <strong>{formatEthLabel(parsedDonateAmount)}</strong>
+                </p>
+              )}
+              {donationPreviewActive && (
+                <p style={{ fontSize: 14, color: "var(--text-secondary)", marginTop: 8 }}>
+                  This donation would move funding from <strong>{percentLabel}%</strong> to{" "}
+                  <strong>{projectedPercentLabel}%</strong>
+                  {crossesBootstrapWithPreview
+                    ? ", which reaches the bootstrap release line."
+                    : "."}
+                </p>
+              )}
+              {txHash && (
+                <div className="tx-confirmation tx-success">
+                  <p>Transaction submitted.</p>
+                  <a
+                    className="tx-link"
+                    href={`https://sepolia.etherscan.io/tx/${txHash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    View on Etherscan →
+                  </a>
+                </div>
+              )}
+            </>
+          )}
           </div>
         </div>
       )}
 
       {/* Milestones */}
       <div className="detail-section">
-        <h3 className="detail-section-title">📋 Milestones</h3>
+        <h3 className="detail-section-title">Milestones</h3>
+        {campaign.status !== 2 && campaign.status !== 3 && (
+          <div className="milestone-gate-banner">
+            {usesLegacyGoalGate ? (
+              <>
+                <strong>This is a legacy campaign that still uses goal-gated unlocking.</strong>{" "}
+                It is currently {percentLabel}% funded, so bootstrap and later milestones stay
+                locked until fundraising reaches 100%.
+              </>
+            ) : !campaign.bootstrapReleased ? (
+              <>
+                <strong>Bootstrap unlocks first at {bootstrapUnlockPercent}% funded.</strong> This
+                campaign is currently {percentLabel}% funded. Once bootstrap is released, each
+                later milestone opens when its own cumulative funding threshold is reached and the
+                previous milestone is approved.
+              </>
+            ) : (
+              <>
+                <strong>Bootstrap is already live.</strong> Later milestones now open one by one as
+                the campaign reaches each cumulative funding threshold and previous milestones are
+                approved.
+              </>
+            )}
+          </div>
+        )}
         {milestones.map((m: MilestoneInfo) => {
           const isVoting = m.status === 2;
-          const votingOpen = isVoting && Date.now() / 1000 <= m.votingDeadline;
-          const votingClosed = isVoting && Date.now() / 1000 > m.votingDeadline;
           const totalVotes = m.votesFor + m.votesAgainst;
+          const allVotingWeightCast = campaign.raisedAmount > 0n && totalVotes >= campaign.raisedAmount;
+          const votingOpen =
+            isVoting &&
+            Date.now() / 1000 <= m.votingDeadline &&
+            !allVotingWeightCast;
+          const votingClosed =
+            isVoting &&
+            (Date.now() / 1000 > m.votingDeadline || allVotingWeightCast);
           const approvePercent = totalVotes > 0n ? Number((m.votesFor * 100n) / totalVotes) : 0;
+          const challengePercent = totalVotes > 0n ? 100 - approvePercent : 0;
+          const milestoneEvidence = getEvidenceForMilestone(m);
+          const milestoneUploads = milestoneEvidence?.uploads ?? [];
+          const milestoneDisplay = getMilestoneDisplayState(m, campaign, milestones);
+          const unlockPercent = getMilestoneUnlockPercent(m, milestones);
 
           return (
             <div className="milestone-card" key={m.id}>
               <div className="milestone-card-header">
                 <div>
                   <span className="milestone-card-title">
-                    {m.id === 0 ? "🏁 " : `#${m.id} `}
+                    {m.id === 0 ? "Bootstrap · " : `#${m.id} · `}
                     {m.title}
                   </span>
                   <span style={{ marginLeft: 8, fontFamily: "var(--font-mono)", fontSize: 13 }}>
-                    ({m.fundPercent}%)
+                    (unlocks at {unlockPercent}%)
                   </span>
                 </div>
-                <span className={`neo-tag ${MILESTONE_TAG_COLORS[m.status]}`}>
-                  {MILESTONE_STATUS[m.status]}
+                <span className={`neo-tag ${milestoneDisplay.tagClass}`}>
+                  {milestoneDisplay.label}
                 </span>
               </div>
 
               <p style={{ fontSize: 14, color: "var(--text-secondary)", marginBottom: 12 }}>
-                {m.description}
+                {m.id === 0
+                  ? usesLegacyGoalGate
+                    ? "Bootstrap reserve released automatically once the campaign reaches its full funding goal."
+                    : `Bootstrap reserve released automatically once donations reach ${bootstrapUnlockPercent}% of the campaign goal.`
+                  : m.description}
               </p>
+
+              {milestoneDisplay.helperText && (
+                <p className="milestone-helper-copy">{milestoneDisplay.helperText}</p>
+              )}
 
               {m.ipfsHash && (
                 <p style={{ fontSize: 13 }}>
-                  📎 Evidence:{" "}
+                  Evidence:{" "}
                   <a
                     className="tx-link"
-                    href={`https://ipfs.io/ipfs/${m.ipfsHash}`}
+                    href={getPrimaryIpfsUrl(m.ipfsHash)}
                     target="_blank"
                     rel="noopener noreferrer"
                   >
@@ -312,13 +1265,265 @@ export default function CampaignDetail({ wallet }: DetailProps) {
                 </p>
               )}
 
+              {milestoneUploads.length > 0 && (
+                <div className="evidence-location-panel">
+                  <p style={{ fontWeight: 700, marginBottom: 8 }}>Submitted Evidence</p>
+                  {(milestoneEvidence?.authenticity || milestoneEvidence?.geospatial || milestoneEvidence?.binding || milestoneEvidence?.aiReview) && (
+                    <div className="evidence-summary-card">
+                      {milestoneEvidence.authenticity && (
+                        <div className="evidence-summary-row">
+                          <span className={`neo-tag ${milestoneEvidence.authenticity.passed ? "neo-tag-green" : "neo-tag-red"}`}>
+                            {milestoneEvidence.authenticity.passed ? "Authenticity passed" : "Authenticity flagged"}
+                          </span>
+                          {milestoneEvidence.authenticity.duplicateCount > 0 && (
+                            <span className="profile-inline-stat">
+                              {milestoneEvidence.authenticity.duplicateCount} duplicate file match{milestoneEvidence.authenticity.duplicateCount > 1 ? "es" : ""}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {milestoneEvidence.aiReview && (
+                        <div className="evidence-summary-row">
+                          <span
+                            className={`neo-tag ${
+                              milestoneEvidence.aiReview.verdict === "Flagged"
+                                ? "neo-tag-red"
+                                : milestoneEvidence.aiReview.verdict === "Verified"
+                                  ? "neo-tag-green"
+                                  : "neo-tag-yellow"
+                            }`}
+                          >
+                            OpenAI visual check: {milestoneEvidence.aiReview.verdict}
+                          </span>
+                          <span className="profile-inline-stat">
+                            Score {milestoneEvidence.aiReview.score}/100
+                          </span>
+                        </div>
+                      )}
+                      {milestoneEvidence.binding && (
+                        <div className="evidence-summary-row">
+                          <span className={`neo-tag ${milestoneEvidence.binding.passed ? "neo-tag-green" : "neo-tag-red"}`}>
+                            Campaign proof: {milestoneEvidence.binding.status}
+                          </span>
+                          {milestoneEvidence.binding.proofCode && (
+                            <span className="profile-inline-stat">
+                              Code {milestoneEvidence.binding.proofCode}
+                            </span>
+                          )}
+                          {milestoneEvidence.binding.previousMilestoneMatches.length > 0 && (
+                            <span className="profile-inline-stat">
+                              {milestoneEvidence.binding.previousMilestoneMatches.length} prior milestone match{milestoneEvidence.binding.previousMilestoneMatches.length > 1 ? "es" : ""}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {milestoneEvidence.geospatial && (
+                        <div className="evidence-summary-row">
+                          <span className={`neo-tag ${getGeospatialTone(milestoneEvidence.geospatial.status)}`}>
+                            Geospatial review: {milestoneEvidence.geospatial.status}
+                          </span>
+                          <span className="profile-inline-stat">
+                            Confidence {milestoneEvidence.geospatial.confidence}%
+                          </span>
+                          {typeof milestoneEvidence.geospatial.averageDistanceKm === "number" && (
+                            <span className="profile-inline-stat">
+                              Avg. distance {milestoneEvidence.geospatial.averageDistanceKm} km
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {milestoneEvidence.geospatial?.summary && (
+                        <p className="evidence-summary-copy">{milestoneEvidence.geospatial.summary}</p>
+                      )}
+                      {milestoneEvidence.aiReview?.summary && (
+                        <p className="evidence-summary-copy">
+                          OpenAI check: {milestoneEvidence.aiReview.summary}
+                        </p>
+                      )}
+                      {milestoneEvidence.geospatial?.keyClues?.length ? (
+                        <div className="creator-profile-pill-row" style={{ marginTop: 10 }}>
+                          {milestoneEvidence.geospatial.keyClues.map((clue) => (
+                            <span key={clue} className="profile-inline-stat">{clue}</span>
+                          ))}
+                        </div>
+                      ) : null}
+                      {milestoneEvidence.binding?.notes?.length ? (
+                        <ul className="evidence-issue-list">
+                          {milestoneEvidence.binding.notes.slice(0, 4).map((note) => (
+                            <li key={note}>{note}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                      {milestoneEvidence.authenticity?.notes?.length ? (
+                        <ul className="evidence-issue-list">
+                          {milestoneEvidence.authenticity.notes.slice(0, 4).map((note) => (
+                            <li key={note}>{note}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  )}
+                  <div className="evidence-summary-card">
+                    <div className="evidence-summary-row">
+                      <span className="neo-tag neo-tag-outline">Reviewer checks</span>
+                      <span className="profile-inline-stat">Current time {currentReviewTime}</span>
+                    </div>
+                    <p className="evidence-summary-copy">
+                      To approve a milestone, VeraFund looks for an original site photo, GPS metadata when
+                      available, a fresh capture time, a visible proof code for this campaign and milestone,
+                      and visual progress that matches the milestone description.
+                    </p>
+                  </div>
+                  {milestoneUploads.map((upload) => (
+                    <div key={upload.cid} className="evidence-location-card">
+                      <a
+                        href={getPrimaryIpfsUrl(upload.cid)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="evidence-image-link"
+                      >
+                        <img
+                          src={getPrimaryIpfsUrl(upload.cid)}
+                          alt={upload.fileName}
+                          className="evidence-image-preview"
+                          loading="lazy"
+                        />
+                      </a>
+                      <div style={{ fontWeight: 700 }}>{upload.fileName}</div>
+                      <p style={{ fontSize: 13 }}>
+                        View file:{" "}
+                        <a
+                          className="tx-link"
+                          href={getPrimaryIpfsUrl(upload.cid)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {upload.cid.slice(0, 16)}...
+                        </a>
+                      </p>
+                      {upload.location ? (
+                        <p style={{ fontSize: 13 }}>
+                          Photo GPS:{" "}
+                          <a
+                            className="tx-link"
+                            href={upload.location.googleMapsUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            {upload.location.latitude.toFixed(5)}, {upload.location.longitude.toFixed(5)}
+                          </a>
+                          {" · "}
+                          <a
+                            className="tx-link"
+                            href={upload.location.satelliteViewUrl || getSatelliteViewUrl(upload.location.latitude, upload.location.longitude)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            Satellite view
+                          </a>
+                        </p>
+                      ) : (
+                        <p style={{ fontSize: 13 }}>
+                          No GPS EXIF data was found in the original file. Ask the organiser to upload the
+                          original phone-camera image with location services enabled, not a screenshot or edited export.
+                        </p>
+                      )}
+
+                      <p style={{ fontSize: 13 }}>
+                        Captured at:{" "}
+                        <strong>{formatEvidenceTimestamp(upload.authenticity?.capturedAt)}</strong>
+                        {upload.authenticity?.captureTiming?.status && (
+                          <>
+                            {" · "}
+                            Review timing: <strong>{upload.authenticity.captureTiming.status}</strong>
+                          </>
+                        )}
+                      </p>
+
+                      {upload.location?.localityLabel && (
+                        <p style={{ fontSize: 13 }}>
+                          Reverse-geocoded locality: <strong>{upload.location.localityLabel}</strong>
+                        </p>
+                      )}
+
+                      {upload.comparison?.claimedLocation?.googleMapsUrl && (
+                        <p style={{ fontSize: 13 }}>
+                          Claimed location:{" "}
+                          <a
+                            className="tx-link"
+                            href={upload.comparison.claimedLocation.googleMapsUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            {upload.comparison.claimedLocation.label || "Project site"}
+                          </a>
+                          {upload.comparison.claimedLocation.latitude !== undefined &&
+                            upload.comparison.claimedLocation.longitude !== undefined && (
+                              <>
+                                {" · "}
+                                <a
+                                  className="tx-link"
+                                  href={
+                                    upload.comparison.claimedLocation.satelliteViewUrl ||
+                                    getSatelliteViewUrl(
+                                      upload.comparison.claimedLocation.latitude,
+                                      upload.comparison.claimedLocation.longitude
+                                    )
+                                  }
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                >
+                                  Claimed site satellite view
+                                </a>
+                              </>
+                            )}
+                          {typeof upload.comparison.distanceKm === "number" && (
+                            <>
+                              {" · "}
+                              {upload.comparison.distanceKm} km away
+                            </>
+                          )}
+                        </p>
+                      )}
+
+                      {(upload.authenticity?.geospatial || upload.authenticity?.failureReasons?.length) && (
+                        <div className="evidence-inline-notes">
+                          {upload.authenticity?.geospatial && (
+                            <p style={{ fontSize: 13 }}>
+                              Locality match:{" "}
+                              <strong>
+                                {upload.authenticity.geospatial.localityMatch === true
+                                  ? "Matched"
+                                  : upload.authenticity.geospatial.localityMatch === false
+                                  ? "Mismatch"
+                                  : "Unknown"}
+                              </strong>
+                              {typeof upload.authenticity.geospatial.localityConfidence === "number" && (
+                                <> · confidence {upload.authenticity.geospatial.localityConfidence}%</>
+                              )}
+                            </p>
+                          )}
+                          {upload.authenticity?.failureReasons?.length ? (
+                            <ul className="evidence-issue-list compact">
+                              {upload.authenticity.failureReasons.slice(0, 4).map((reason) => (
+                                <li key={reason}>{reason}</li>
+                              ))}
+                            </ul>
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
               {/* Voting stats */}
               {isVoting && (
                 <>
                   <div className="milestone-votes">
                     <div className="vote-bar">
                       <div className="vote-bar-label">
-                        <span>👍 Approve</span>
+                        <span>Approve</span>
                         <span>{approvePercent}%</span>
                       </div>
                       <div className="neo-progress" style={{ height: 16 }}>
@@ -330,13 +1535,13 @@ export default function CampaignDetail({ wallet }: DetailProps) {
                     </div>
                     <div className="vote-bar">
                       <div className="vote-bar-label">
-                        <span>👎 Challenge</span>
-                        <span>{100 - approvePercent}%</span>
+                        <span>Challenge</span>
+                        <span>{challengePercent}%</span>
                       </div>
                       <div className="neo-progress" style={{ height: 16 }}>
                         <div
                           className="neo-progress-bar"
-                          style={{ width: `${100 - approvePercent}%`, background: "var(--bg-red)" }}
+                          style={{ width: `${challengePercent}%`, background: "var(--color-ink)" }}
                         />
                       </div>
                     </div>
@@ -344,8 +1549,14 @@ export default function CampaignDetail({ wallet }: DetailProps) {
 
                   {votingOpen && (
                     <div className="voting-countdown" style={{ marginTop: 12 }}>
-                      ⏰ Voting ends{" "}
+                      Voting ends{" "}
                       {new Date(m.votingDeadline * 1000).toLocaleString()}
+                    </div>
+                  )}
+
+                  {isVoting && allVotingWeightCast && (
+                    <div className="voting-countdown" style={{ marginTop: 12 }}>
+                      All donor voting weight has been cast. This milestone can be resolved now.
                     </div>
                   )}
 
@@ -357,14 +1568,14 @@ export default function CampaignDetail({ wallet }: DetailProps) {
                         onClick={() => handleVote(m.id, true)}
                         disabled={votingId === m.id}
                       >
-                        👍 Approve
+                        Approve
                       </button>
                       <button
-                        className="neo-btn neo-btn-red"
+                        className="neo-btn neo-btn-danger"
                         onClick={() => handleVote(m.id, false)}
                         disabled={votingId === m.id}
                       >
-                        👎 Challenge
+                        Challenge
                       </button>
                     </div>
                   )}
@@ -373,10 +1584,10 @@ export default function CampaignDetail({ wallet }: DetailProps) {
                   {votingClosed && (
                     <div style={{ marginTop: 12 }}>
                       <button
-                        className="neo-btn neo-btn-yellow"
+                        className="neo-btn neo-btn-outline"
                         onClick={() => handleResolve(m.id)}
                       >
-                        ⚖️ Resolve Vote
+                        Resolve Vote
                       </button>
                     </div>
                   )}
@@ -387,7 +1598,7 @@ export default function CampaignDetail({ wallet }: DetailProps) {
               {m.aiScore > 0 && (
                 <div style={{ marginTop: 8 }}>
                   <span className={`neo-tag ${m.aiScore >= 70 ? "neo-tag-green" : "neo-tag-red"}`}>
-                    🤖 AI Score: {m.aiScore}/100
+                    AI Score: {m.aiScore}/100
                   </span>
                   {m.resolvedByAI && (
                     <span className="neo-tag neo-tag-purple" style={{ marginLeft: 8 }}>
@@ -398,9 +1609,62 @@ export default function CampaignDetail({ wallet }: DetailProps) {
               )}
 
               {/* NGO: Submit evidence */}
-              {isNGO && (m.status === 0 || m.status === 4) && m.id > 0 && campaign.status === 1 && (
+              {isNGO &&
+                ((m.status === 4 && campaign.status === 1) ||
+                  isMilestoneReadyForSubmission(m, campaign, milestones)) && (
                 <div style={{ marginTop: 12, padding: 16, background: "var(--bg)", borderRadius: 8, border: "2px solid var(--border-color)" }}>
-                  <p style={{ fontWeight: 700, marginBottom: 8 }}>📤 Submit Evidence</p>
+                  <p style={{ fontWeight: 700, marginBottom: 8 }}>Submit Evidence</p>
+                  {address && (
+                    <div className="milestone-gate-banner" style={{ marginBottom: 12 }}>
+                      <strong>Include this proof code in the photos if possible:</strong>{" "}
+                      <span style={{ fontFamily: "var(--font-mono)" }}>{buildProofCode(address, m.id)}</span>
+                      . Showing this code on a board, paper, or sign helps prove the images were
+                      captured specifically for this campaign update.
+                    </div>
+                  )}
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+                    <button
+                      className="neo-btn neo-btn-outline"
+                      type="button"
+                      onClick={handleUseCurrentLocation}
+                      disabled={locating}
+                      style={{ fontSize: 14, padding: "8px 16px" }}
+                    >
+                      {locating ? "Getting location..." : "Use current location"}
+                    </button>
+                    <span style={{ fontSize: 13, color: "var(--text-muted)", alignSelf: "center" }}>
+                      Uses your browser GPS to fill precise coordinates.
+                    </span>
+                  </div>
+                  <div className="form-row" style={{ marginBottom: 12 }}>
+                    <div className="form-group">
+                      <label className="form-label">Claimed latitude</label>
+                      <input
+                        className="neo-input"
+                        value={claimedLatitude}
+                        onChange={(e) => setClaimedLatitude(e.target.value)}
+                        placeholder="28.6139"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">Claimed longitude</label>
+                      <input
+                        className="neo-input"
+                        value={claimedLongitude}
+                        onChange={(e) => setClaimedLongitude(e.target.value)}
+                        placeholder="77.2090"
+                      />
+                    </div>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Claimed project location label</label>
+                    <input
+                      className="neo-input"
+                      value={claimedLocationLabel}
+                      onChange={(e) => setClaimedLocationLabel(e.target.value)}
+                      placeholder="Village borewell site"
+                    />
+                  </div>
                   <input
                     type="file"
                     multiple
@@ -429,7 +1693,7 @@ export default function CampaignDetail({ wallet }: DetailProps) {
       {/* Contract link */}
       <div className="neo-card" style={{ background: "var(--bg)", marginTop: 16 }}>
         <p style={{ fontSize: 14 }}>
-          📜 Contract:{" "}
+          Contract:{" "}
           <a
             className="tx-link"
             href={`https://sepolia.etherscan.io/address/${address}`}

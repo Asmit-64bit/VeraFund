@@ -84,6 +84,15 @@ contract ImpactFundFactory {
         require(totalPercent == 100, "Factory: milestone percentages must sum to 100");
         require(_milestones.length >= 2 && _milestones.length <= 5, "Factory: 2-5 milestones required");
         require(_bootstrapPercent >= 1 && _bootstrapPercent <= 15, "Factory: bootstrap must be 1-15%");
+        require(_campaignDeadline > block.timestamp, "Factory: fundraising deadline must be in the future");
+
+        uint256 previousDeadline = _campaignDeadline;
+        for (uint256 i = 0; i < _milestones.length; i++) {
+            require(_milestones[i].deadline > block.timestamp, "Factory: milestone deadline must be in the future");
+            require(_milestones[i].deadline > _campaignDeadline, "Factory: milestone deadline must be after fundraising deadline");
+            require(_milestones[i].deadline > previousDeadline, "Factory: milestone deadlines must be increasing");
+            previousDeadline = _milestones[i].deadline;
+        }
 
         // Deploy new campaign
         ImpactFundCampaign campaign = new ImpactFundCampaign(
@@ -98,13 +107,18 @@ contract ImpactFundFactory {
             backendSigner
         );
 
-        // Add user-defined milestones
-        // Note: fundPercent for user milestones = their % of the remaining (100 - bootstrap)%
-        // The contract stores them as-is; the actual tranche calculation uses goalAmount * fundPercent / 100
-        // So we need to convert: actual % of total = userPercent * (100 - bootstrap) / 100
+        // Add user-defined milestones.
+        // Milestone percentages are entered as shares of the post-bootstrap pool.
+        // We convert them to shares of the total goal and assign any rounding remainder
+        // to the final milestone so bootstrap + milestones always cover the full goal.
+        uint256 remainingPercent = 100 - _bootstrapPercent;
+        uint256 assignedPercent = 0;
         for (uint256 i = 0; i < _milestones.length; i++) {
-            // Convert from % of post-bootstrap to % of total goal
-            uint256 actualPercent = (_milestones[i].fundPercent * (100 - _bootstrapPercent)) / 100;
+            uint256 actualPercent = i == _milestones.length - 1
+                ? remainingPercent - assignedPercent
+                : (_milestones[i].fundPercent * remainingPercent) / 100;
+
+            assignedPercent += actualPercent;
             campaign.addMilestone(
                 _milestones[i].title,
                 _milestones[i].description,

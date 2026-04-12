@@ -6,7 +6,8 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// @title ImpactFundCampaign — Milestone-gated donation escrow with bootstrap grant
 /// @notice One instance per campaign. Holds ETH in escrow. Features:
-///         - Bootstrap grant released automatically when funding goal is hit
+///         - Bootstrap grant released automatically once its tranche is funded
+///         - Later milestones unlock as cumulative funding thresholds are reached
 ///         - 7-day voting window per milestone with quorum requirement
 ///         - AI tiebreaker when quorum is not met
 contract ImpactFundCampaign is ReentrancyGuard {
@@ -56,6 +57,7 @@ contract ImpactFundCampaign is ReentrancyGuard {
     uint256 public constant APPROVAL_THRESHOLD = 60;    // 60% of votes must approve
     uint256 public constant VOTING_WINDOW = 7 days;
     uint256 public constant AI_AUTO_APPROVE_SCORE = 70; // AI score needed for tiebreaker
+    uint256 public constant STALE_WINDOW = 60 days;     // inactivity grace period after a milestone deadline
 
     // ──────────────────────────────────────────────
     // State
@@ -98,6 +100,9 @@ contract ImpactFundCampaign is ReentrancyGuard {
     /// @notice Track if donor has already been refunded
     mapping(address => bool) public refunded;
 
+    /// @notice Snapshot of remaining locked funds when the campaign is marked stale
+    uint256 public staleRefundPool;
+
     /// @notice The address that deployed this contract (factory or direct deployer)
     address public deployer;
 
@@ -113,6 +118,7 @@ contract ImpactFundCampaign is ReentrancyGuard {
     event FundsReleased(uint256 indexed milestoneId, uint256 amount, bool resolvedByAI);
     event MilestoneRejected(uint256 indexed milestoneId, bool resolvedByAI);
     event RefundIssued(address indexed donor, uint256 amount);
+    event CampaignMarkedStale(uint256 indexed milestoneId, uint256 refundPool);
 
     // ──────────────────────────────────────────────
     // Modifiers
@@ -218,10 +224,16 @@ contract ImpactFundCampaign is ReentrancyGuard {
     // Donate
     // ──────────────────────────────────────────────
 
-    /// @notice Accept ETH donation, record donor, mint DonorNFT, trigger bootstrap if goal hit
-    function donate() external payable nonReentrant inStatus(CampaignStatus.Fundraising) {
+    /// @notice Accept ETH donation, record donor, mint DonorNFT, trigger tranche unlocks
+    function donate() external payable nonReentrant {
+        require(
+            status == CampaignStatus.Fundraising || status == CampaignStatus.Active,
+            "Campaign: donations are closed"
+        );
         require(msg.value > 0, "Campaign: donation must be > 0");
+        require(msg.sender != ngoAddress, "Campaign: NGO cannot donate to own campaign");
         require(block.timestamp < campaignDeadline, "Campaign: fundraising deadline passed");
+        require(raisedAmount + msg.value <= goalAmount, "Campaign: donation exceeds goal");
 
         // Track donor
         if (!isDonor[msg.sender]) {
@@ -236,8 +248,8 @@ contract ImpactFundCampaign is ReentrancyGuard {
 
         emit DonationReceived(msg.sender, msg.value);
 
-        // Auto-transition to Active and release bootstrap when goal is met
-        if (raisedAmount >= goalAmount && !bootstrapReleased) {
+        // Release bootstrap as soon as its tranche is fully funded.
+        if (!bootstrapReleased && isMilestoneFundingUnlocked(0)) {
             _releaseBootstrap();
         }
     }
@@ -255,7 +267,7 @@ contract ImpactFundCampaign is ReentrancyGuard {
         milestones[0].status = MilestoneStatus.Approved;
         fundsReleased[0] = true;
 
-        // Transition to Active
+        // Campaign becomes active as soon as bootstrap funding is secured.
         status = CampaignStatus.Active;
 
         // Transfer bootstrap to NGO
@@ -277,6 +289,9 @@ contract ImpactFundCampaign is ReentrancyGuard {
     ) external onlyNGO inStatus(CampaignStatus.Active) {
         require(milestoneId > 0, "Campaign: cannot submit milestone 0 (bootstrap)");
         require(milestoneId < milestones.length, "Campaign: invalid milestone id");
+        require(bootstrapReleased, "Campaign: bootstrap not released");
+        require(_previousMilestoneApproved(milestoneId), "Campaign: previous milestone not approved");
+        require(isMilestoneFundingUnlocked(milestoneId), "Campaign: milestone funding not unlocked");
 
         Milestone storage m = milestones[milestoneId];
         require(
@@ -357,16 +372,21 @@ contract ImpactFundCampaign is ReentrancyGuard {
     // Resolve Vote (anyone, after window closes)
     // ──────────────────────────────────────────────
 
-    /// @notice Resolve a milestone vote after the 7-day window closes
+    /// @notice Resolve a milestone vote once the window closes or all donor weight has voted
     ///         Checks quorum → threshold → AI fallback
     function resolveVote(uint256 milestoneId) external inStatus(CampaignStatus.Active) {
         require(milestoneId > 0 && milestoneId < milestones.length, "Campaign: invalid milestone id");
 
         Milestone storage m = milestones[milestoneId];
         require(m.status == MilestoneStatus.Voting, "Campaign: milestone not in voting");
-        require(block.timestamp > m.votingDeadline, "Campaign: voting still open");
 
         uint256 totalVoted = m.votesFor + m.votesAgainst;
+        bool allDonorWeightCast = totalVoted >= raisedAmount;
+        require(
+            block.timestamp > m.votingDeadline || allDonorWeightCast,
+            "Campaign: voting still open"
+        );
+
         uint256 quorumWeight = (raisedAmount * QUORUM_PERCENT) / 100;
         bool quorumMet = totalVoted >= quorumWeight;
 
@@ -399,7 +419,10 @@ contract ImpactFundCampaign is ReentrancyGuard {
         Milestone storage m = milestones[milestoneId];
 
         // Calculate tranche: fundPercent is % of total goal
-        uint256 trancheAmount = (goalAmount * m.fundPercent) / 100;
+        uint256 trancheAmount =
+            milestoneId == milestones.length - 1
+                ? address(this).balance
+                : (goalAmount * m.fundPercent) / 100;
 
         // Cap at available balance
         uint256 available = address(this).balance;
@@ -418,23 +441,54 @@ contract ImpactFundCampaign is ReentrancyGuard {
         // Check if all milestones are approved → complete campaign
         if (_allMilestonesApproved()) {
             status = CampaignStatus.Completed;
+            for (uint256 i = 0; i < donorList.length; i++) {
+                donorNFTContract.recordCampaignSuccess(donorList[i], address(this));
+            }
         }
+    }
+
+    // ──────────────────────────────────────────────
+    // Stale campaign protection
+    // ──────────────────────────────────────────────
+
+    /// @notice Any account can mark an active campaign stale after 60+ days of missed milestone activity
+    function markCampaignStale() external inStatus(CampaignStatus.Active) {
+        (bool stale, uint256 milestoneId) = _getStaleMilestone();
+        require(stale, "Campaign: stale refund not available");
+        require(staleRefundPool == 0, "Campaign: stale refund already initialized");
+
+        status = CampaignStatus.Cancelled;
+        staleRefundPool = address(this).balance;
+
+        emit CampaignMarkedStale(milestoneId, staleRefundPool);
     }
 
     // ──────────────────────────────────────────────
     // Refund
     // ──────────────────────────────────────────────
 
-    /// @notice Donor can reclaim funds if campaign is cancelled or deadline passed with no activity
+    /// @notice Donor can reclaim funds if fundraising failed or an active campaign was marked stale
     function refund() external onlyDonor nonReentrant {
+        bool fundraisingFailed =
+            block.timestamp > campaignDeadline &&
+            raisedAmount < goalAmount &&
+            status != CampaignStatus.Completed;
+
         require(
             status == CampaignStatus.Cancelled ||
-            (status == CampaignStatus.Fundraising && block.timestamp > campaignDeadline),
+            fundraisingFailed,
             "Campaign: refund not available"
         );
         require(!refunded[msg.sender], "Campaign: already refunded");
 
-        uint256 amount = donations[msg.sender];
+        if (fundraisingFailed && staleRefundPool == 0) {
+            staleRefundPool = address(this).balance;
+            if (status != CampaignStatus.Cancelled) {
+                status = CampaignStatus.Cancelled;
+            }
+        }
+
+        uint256 amount = getRefundAmount(msg.sender);
         require(amount > 0, "Campaign: nothing to refund");
 
         refunded[msg.sender] = true;
@@ -485,6 +539,46 @@ contract ImpactFundCampaign is ReentrancyGuard {
         return donations[donor];
     }
 
+    function getRefundAmount(address donor) public view returns (uint256) {
+        if (donations[donor] == 0 || refunded[donor]) {
+            return 0;
+        }
+
+        bool fundraisingFailed =
+            block.timestamp > campaignDeadline &&
+            raisedAmount < goalAmount &&
+            status != CampaignStatus.Completed;
+
+        if ((status == CampaignStatus.Cancelled && staleRefundPool > 0) || fundraisingFailed) {
+            uint256 refundPool = staleRefundPool > 0 ? staleRefundPool : address(this).balance;
+            return (refundPool * donations[donor]) / raisedAmount;
+        }
+
+        return 0;
+    }
+
+    function isStale() external view returns (bool) {
+        (bool stale, ) = _getStaleMilestone();
+        return stale;
+    }
+
+    /// @notice Returns the cumulative amount that must be raised before a milestone can open.
+    function getMilestoneUnlockAmount(uint256 milestoneId) public view returns (uint256) {
+        require(milestoneId < milestones.length, "Campaign: invalid milestone id");
+
+        uint256 cumulativePercent = 0;
+        for (uint256 i = 0; i <= milestoneId; i++) {
+            cumulativePercent += milestones[i].fundPercent;
+        }
+
+        return (goalAmount * cumulativePercent) / 100;
+    }
+
+    /// @notice Returns whether the campaign has raised enough to open a milestone.
+    function isMilestoneFundingUnlocked(uint256 milestoneId) public view returns (bool) {
+        return raisedAmount >= getMilestoneUnlockAmount(milestoneId);
+    }
+
     // ──────────────────────────────────────────────
     // Internal helpers
     // ──────────────────────────────────────────────
@@ -496,6 +590,38 @@ contract ImpactFundCampaign is ReentrancyGuard {
             }
         }
         return true;
+    }
+
+    function _previousMilestoneApproved(uint256 milestoneId) internal view returns (bool) {
+        if (milestoneId == 0) {
+            return true;
+        }
+
+        return milestones[milestoneId - 1].status == MilestoneStatus.Approved;
+    }
+
+    function _getStaleMilestone() internal view returns (bool, uint256) {
+        for (uint256 i = 1; i < milestones.length; i++) {
+            Milestone storage milestone = milestones[i];
+
+            if (milestone.status == MilestoneStatus.Approved) {
+                continue;
+            }
+
+            uint256 activityDeadline;
+
+            if (milestone.status == MilestoneStatus.Voting) {
+                activityDeadline = milestone.votingDeadline;
+            } else {
+                activityDeadline = milestone.deadline;
+            }
+
+            if (activityDeadline > 0 && block.timestamp > activityDeadline + STALE_WINDOW) {
+                return (true, i);
+            }
+        }
+
+        return (false, 0);
     }
 
     receive() external payable {}

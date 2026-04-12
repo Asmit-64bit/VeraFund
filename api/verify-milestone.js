@@ -1,4 +1,3 @@
-const express = require("express");
 const { ethers } = require("ethers");
 const {
   buildProofCode,
@@ -6,17 +5,18 @@ const {
   summarizeAuthenticityChecks,
   summarizeCampaignBindingChecks,
   summarizeGeospatialChecks,
-} = require("../../lib/enhancements");
+} = require("../lib/enhancements");
 const {
   findPreviousEvidenceMatches,
   loadMilestoneEvidenceFromStore,
   saveMilestoneEvidence,
   summarizeEvidenceHistory,
-} = require("../../lib/evidenceStore");
+} = require("../lib/evidenceStore");
 
-const router = express.Router();
+const CAMPAIGN_ABI = [
+  "function setAIScore(uint256 milestoneId, uint8 score) external",
+];
 
-// In-memory verdict cache: key = "${campaignAddress}_${milestoneId}"
 const verdictCache = {};
 const evidenceMetadataCache = {};
 
@@ -61,32 +61,28 @@ async function requestOpenAIJson(messages) {
   return parseJsonResponse(openaiData.choices?.[0]?.message?.content);
 }
 
-// Campaign ABI — only the functions we need
-const CAMPAIGN_ABI = [
-  "function setAIScore(uint256 milestoneId, uint8 score) external",
-];
-
-/**
- * Get ethers signer for backend wallet
- */
 function getBackendSigner() {
   if (!process.env.BACKEND_SIGNER_PRIVATE_KEY || !process.env.SEPOLIA_RPC_URL) {
     throw new Error("Missing BACKEND_SIGNER_PRIVATE_KEY or SEPOLIA_RPC_URL");
   }
+
   const provider = new ethers.JsonRpcProvider(process.env.SEPOLIA_RPC_URL);
   return new ethers.Wallet(process.env.BACKEND_SIGNER_PRIVATE_KEY, provider);
 }
 
-/**
- * POST /verify-milestone
- *
- * Analyze submitted evidence with GPT-4o vision.
- * Stores result, writes AI score on-chain via setAIScore().
- *
- * Body: { milestoneId, campaignAddress, cids, milestoneDescription }
- * Response: { score, verdict, summary }
- */
-router.post("/verify-milestone", async (req, res) => {
+module.exports = async function handler(req, res) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
   try {
     const {
       milestoneId,
@@ -98,19 +94,19 @@ router.post("/verify-milestone", async (req, res) => {
       campaignTitle = "VeraFund Campaign",
       milestoneTitle = "Milestone",
       proofCode = null,
-    } = req.body;
+    } = req.body || {};
 
-    if (!milestoneId && milestoneId !== 0) {
+    if (milestoneId !== 0 && !milestoneId) {
       return res.status(400).json({ error: "milestoneId is required" });
     }
-    if (!campaignAddress || !cids || !milestoneDescription) {
+
+    if (!campaignAddress || !Array.isArray(cids) || cids.length === 0 || !milestoneDescription) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // Check cache
     const cacheKey = `${campaignAddress}_${milestoneId}`;
     if (verdictCache[cacheKey]) {
-      return res.json(verdictCache[cacheKey]);
+      return res.status(200).json(verdictCache[cacheKey]);
     }
 
     const authenticitySummary = summarizeAuthenticityChecks(uploads);
@@ -123,8 +119,8 @@ router.post("/verify-milestone", async (req, res) => {
     );
     const evidenceHistorySummary = summarizeEvidenceHistory(campaignAddress, milestoneId);
 
-    // Fetch images from IPFS and convert to base64
     const imageContents = [];
+
     for (const cid of cids) {
       try {
         imageContents.push(await fetchIpfsImageContent(cid));
@@ -186,7 +182,6 @@ Review whether these images look captured specifically for this campaign milesto
       previousMilestoneMatches,
     });
 
-    // Call OpenAI GPT-4o with vision
     const verdict = await requestOpenAIJson([
       {
         role: "system",
@@ -221,7 +216,6 @@ Please analyze the attached images.`,
       },
     ]);
 
-    // Validate response shape
     if (
       typeof verdict.score !== "number" ||
       !["Verified", "Inconclusive", "Flagged"].includes(verdict.verdict) ||
@@ -295,7 +289,6 @@ Assess whether the scene plausibly matches the claimed project environment and l
       verdict.summary = `${verdict.summary} Campaign-specific proof checks were not strong enough for this milestone.`.trim();
     }
 
-    // Cache the result
     verdictCache[cacheKey] = verdict;
     evidenceMetadataCache[cacheKey] = {
       uploads,
@@ -327,55 +320,35 @@ Assess whether the scene plausibly matches the claimed project environment and l
       },
     });
 
-    // Write AI score on-chain via backend signer
     try {
       const signer = getBackendSigner();
       const campaignContract = new ethers.Contract(campaignAddress, CAMPAIGN_ABI, signer);
       const tx = await campaignContract.setAIScore(milestoneId, verdict.score);
       await tx.wait();
-      console.log(`AI score ${verdict.score} written on-chain for ${cacheKey}, tx: ${tx.hash}`);
     } catch (chainErr) {
       console.error("Failed to write AI score on-chain:", chainErr.message);
-      // Still return the verdict — on-chain write is best-effort
     }
 
-    res.json(verdict);
+    return res.status(200).json(verdict);
   } catch (err) {
     console.error("Verify error:", err.message);
-    res.status(500).json({ error: "Verification failed: " + err.message });
+    return res.status(500).json({ error: "Verification failed: " + err.message });
   }
-});
+};
 
-/**
- * GET /verdict/:campaignAddress/:milestoneId
- *
- * Return cached AI verdict. Returns 404 if not yet verified.
- */
-router.get("/verdict/:campaignAddress/:milestoneId", (req, res) => {
-  const { campaignAddress, milestoneId } = req.params;
-  const cacheKey = `${campaignAddress}_${milestoneId}`;
-
-  if (verdictCache[cacheKey]) {
-    return res.json(verdictCache[cacheKey]);
-  }
-
-  res.status(404).json({ error: "Verdict not found for this milestone" });
-});
-
-router.get("/evidence-metadata", (req, res) => {
+module.exports.getEvidenceMetadata = function getEvidenceMetadata(req, res) {
   const { campaignAddress, milestoneId } = req.query;
   const cacheKey = `${campaignAddress}_${milestoneId}`;
+  const cached = evidenceMetadataCache[cacheKey];
 
-  if (evidenceMetadataCache[cacheKey]) {
-    return res.json(evidenceMetadataCache[cacheKey]);
+  if (!cached) {
+    const stored = loadMilestoneEvidenceFromStore(campaignAddress, milestoneId);
+    if (!stored) {
+      return res.status(404).json({ error: "Evidence metadata not found" });
+    }
+
+    return res.status(200).json(stored);
   }
 
-  const stored = loadMilestoneEvidenceFromStore(campaignAddress, milestoneId);
-  if (stored) {
-    return res.json(stored);
-  }
-
-  return res.status(404).json({ error: "Evidence metadata not found" });
-});
-
-module.exports = router;
+  return res.status(200).json(cached);
+};

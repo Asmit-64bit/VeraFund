@@ -2,9 +2,42 @@ const express = require("express");
 const multer = require("multer");
 const PinataSDK = require("@pinata/sdk");
 const fs = require("fs");
+const {
+  buildProofCode,
+  extractEvidenceMetadata,
+  enrichAuthenticityChecks,
+  normalizeClaimedLocation,
+} = require("../../lib/enhancements");
 
 const router = express.Router();
-const upload = multer({ dest: "uploads/" });
+const MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024;
+const ALLOWED_IMAGE_MIME_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/heic",
+  "image/heif",
+]);
+
+function isAllowedImageMimeType(mimeType) {
+  return ALLOWED_IMAGE_MIME_TYPES.has(String(mimeType || "").toLowerCase());
+}
+
+const upload = multer({
+  dest: "uploads/",
+  limits: {
+    fileSize: MAX_IMAGE_SIZE_BYTES,
+    files: 10,
+  },
+  fileFilter: (_req, file, callback) => {
+    if (!isAllowedImageMimeType(file.mimetype)) {
+      callback(new Error("Only JPEG, PNG, WEBP, and HEIC images are allowed."));
+      return;
+    }
+
+    callback(null, true);
+  },
+});
 
 /**
  * POST /upload-evidence
@@ -25,8 +58,23 @@ router.post("/upload-evidence", upload.array("files", 10), async (req, res) => {
     );
 
     const cids = [];
+    const claimedLocation = normalizeClaimedLocation(req.body);
+    const uploads = [];
+    const milestoneId = req.body?.milestoneId;
+    const campaignAddress = req.body?.campaignAddress;
+    const proofCode =
+      milestoneId !== undefined && campaignAddress
+        ? buildProofCode(campaignAddress, milestoneId)
+        : null;
 
     for (const file of req.files) {
+      const evidenceMetadata = await extractEvidenceMetadata(
+        file.path,
+        file.originalname,
+        claimedLocation
+      );
+      evidenceMetadata.__fileBuffer = await fs.promises.readFile(file.path);
+      await enrichAuthenticityChecks(evidenceMetadata);
       const readableStream = fs.createReadStream(file.path);
       const result = await pinata.pinFileToIPFS(readableStream, {
         pinataMetadata: {
@@ -34,15 +82,23 @@ router.post("/upload-evidence", upload.array("files", 10), async (req, res) => {
         },
       });
       cids.push(result.IpfsHash);
+      uploads.push({
+        cid: result.IpfsHash,
+        ...evidenceMetadata,
+      });
 
-      // Clean up temp file
-      fs.unlinkSync(file.path);
     }
 
-    res.json({ cids });
+    res.json({ cids, uploads, claimedLocation, proofCode });
   } catch (err) {
     console.error("Upload error:", err.message);
     res.status(500).json({ error: "Failed to upload to IPFS: " + err.message });
+  } finally {
+    for (const file of req.files || []) {
+      if (file?.path && fs.existsSync(file.path)) {
+        fs.unlinkSync(file.path);
+      }
+    }
   }
 });
 
