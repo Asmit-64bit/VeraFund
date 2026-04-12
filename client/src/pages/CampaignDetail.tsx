@@ -48,6 +48,8 @@ interface AuditTrailEntry {
   timestamp: number | null;
 }
 
+type MilestoneVoteMap = Record<number, boolean>;
+
 function getReadableAuditTrailError(message: string | null | undefined) {
   const normalized = String(message || "");
 
@@ -62,6 +64,41 @@ function getReadableAuditTrailError(message: string | null | undefined) {
   }
 
   return "Audit trail could not be loaded right now. Please refresh and try again.";
+}
+
+function getReadableVoteError(message: string | null | undefined) {
+  const normalized = String(message || "").toLowerCase();
+
+  if (
+    normalized.includes("already voted") ||
+    normalized.includes("missing revert data") ||
+    normalized.includes("call_exception")
+  ) {
+    return "You have already voted on this milestone. A second vote from the same wallet is not allowed.";
+  }
+
+  if (normalized.includes("not donor")) {
+    return "Only donors to this campaign can vote on milestone evidence.";
+  }
+
+  if (normalized.includes("window closed") || normalized.includes("voting closed")) {
+    return "Voting for this milestone is already closed.";
+  }
+
+  return message || "Vote failed";
+}
+
+function getAiReviewTone(verdict?: EvidenceAIReview["verdict"] | null) {
+  if (verdict === "Verified") return "neo-tag-green";
+  if (verdict === "Flagged") return "neo-tag-red";
+  return "neo-tag-yellow";
+}
+
+function getAiScoreBand(score: number) {
+  if (score >= 80) return "Strong match";
+  if (score >= 60) return "Moderate match";
+  if (score >= 40) return "Weak match";
+  return "Low confidence";
 }
 
 function getProgressPercentNumber(numerator: bigint, denominator: bigint) {
@@ -80,6 +117,31 @@ function buildProofCode(campaignAddress: string, milestoneId: number, when = new
     .slice(0, 6)
     .toUpperCase();
   return `VERA-${compactAddress}-M${milestoneId}-${utcDate}`;
+}
+
+function toProofMarkerWords(value: string, maxWords = 4) {
+  return String(value || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9\s]/g, " ")
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean)
+    .slice(0, maxWords);
+}
+
+function buildProofMarker(
+  campaignAddress: string,
+  milestoneId: number,
+  milestoneTitle: string,
+  when = new Date()
+) {
+  const utcDate = when.toISOString().slice(0, 10).replace(/-/g, "");
+  const compactAddress = String(campaignAddress || "")
+    .replace(/^0x/i, "")
+    .slice(0, 6)
+    .toUpperCase();
+  const titleMarker = toProofMarkerWords(milestoneTitle, 4).join(" ");
+  return `VERAFUND ${compactAddress} M${milestoneId} ${titleMarker} ${utcDate}`.trim();
 }
 
 const MILESTONE_TAG_COLORS: Record<number, string> = {
@@ -253,6 +315,7 @@ export default function CampaignDetail({ wallet }: DetailProps) {
 
   // Voting
   const [votingId, setVotingId] = useState<number | null>(null);
+  const [votedMilestones, setVotedMilestones] = useState<MilestoneVoteMap>({});
 
   const isNGO = wallet.account?.toLowerCase() === campaign?.ngoAddress.toLowerCase();
   const heroBannerSource =
@@ -317,6 +380,42 @@ export default function CampaignDetail({ wallet }: DetailProps) {
       // Ignore storage quota errors.
     }
   }, [address, evidenceMetadataByMilestone]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadVoteStatus() {
+      if (!address || !wallet.account || !wallet.provider || milestones.length === 0) {
+        setVotedMilestones({});
+        return;
+      }
+
+      try {
+        const contract = new ethers.Contract(address, CAMPAIGN_ABI, wallet.provider);
+        const voteStatuses = await Promise.all(
+          milestones
+            .filter((milestone) => milestone.id > 0)
+            .map(async (milestone) => {
+              const hasVoted = await contract.hasVoted(wallet.account, milestone.id);
+              return [milestone.id, Boolean(hasVoted)] as const;
+            })
+        );
+
+        if (!cancelled) {
+          setVotedMilestones(Object.fromEntries(voteStatuses));
+        }
+      } catch {
+        if (!cancelled) {
+          setVotedMilestones({});
+        }
+      }
+    }
+
+    loadVoteStatus();
+    return () => {
+      cancelled = true;
+    };
+  }, [address, milestones, wallet.account, wallet.provider]);
 
   useEffect(() => {
     async function fetchEvidenceMetadata() {
@@ -537,16 +636,25 @@ export default function CampaignDetail({ wallet }: DetailProps) {
   // ── Vote ──
   const handleVote = async (milestoneId: number, approve: boolean) => {
     if (!wallet.signer || !address) return;
+    if (votedMilestones[milestoneId]) {
+      toast.error("You have already voted on this milestone.", { id: "vote" });
+      return;
+    }
     setVotingId(milestoneId);
     try {
       const contract = new ethers.Contract(address, CAMPAIGN_ABI, wallet.signer);
-      const tx = await contract.vote(milestoneId, approve);
       toast.loading("Submitting vote...", { id: "vote" });
+      const tx = await contract.vote(milestoneId, approve);
       await tx.wait();
+      setVotedMilestones((current) => ({
+        ...current,
+        [milestoneId]: true,
+      }));
       toast.success(approve ? "Voted to approve." : "Voted to challenge.", { id: "vote" });
       refetch();
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Vote failed", { id: "vote" });
+      const message = err instanceof Error ? err.message : "Vote failed";
+      toast.error(getReadableVoteError(message), { id: "vote" });
     } finally {
       setVotingId(null);
     }
@@ -1217,6 +1325,7 @@ export default function CampaignDetail({ wallet }: DetailProps) {
             (Date.now() / 1000 > m.votingDeadline || allVotingWeightCast);
           const approvePercent = totalVotes > 0n ? Number((m.votesFor * 100n) / totalVotes) : 0;
           const challengePercent = totalVotes > 0n ? 100 - approvePercent : 0;
+          const hasCurrentWalletVoted = wallet.account ? votedMilestones[m.id] === true : false;
           const milestoneEvidence = getEvidenceForMilestone(m);
           const milestoneUploads = milestoneEvidence?.uploads ?? [];
           const milestoneDisplay = getMilestoneDisplayState(m, campaign, milestones);
@@ -1268,6 +1377,80 @@ export default function CampaignDetail({ wallet }: DetailProps) {
               {milestoneUploads.length > 0 && (
                 <div className="evidence-location-panel">
                   <p style={{ fontWeight: 700, marginBottom: 8 }}>Submitted Evidence</p>
+                  {milestoneEvidence?.aiReview && (
+                    <div className="evidence-ai-card">
+                      <div className="evidence-ai-header">
+                        <div>
+                          <p className="evidence-ai-kicker">OpenAI GPT-4o with Vision</p>
+                          <h4 className="evidence-ai-title">AI Evidence Review</h4>
+                        </div>
+                        <div className="evidence-ai-score-wrap">
+                          <span className={`neo-tag ${getAiReviewTone(milestoneEvidence.aiReview.verdict)}`}>
+                            {milestoneEvidence.aiReview.verdict}
+                          </span>
+                          <div className="evidence-ai-score">
+                            <strong>{milestoneEvidence.aiReview.score}</strong>
+                            <span>/100</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="evidence-ai-grid">
+                        <div className="evidence-ai-metric">
+                          <span className="evidence-ai-label">Visual match</span>
+                          <strong>{getAiScoreBand(milestoneEvidence.aiReview.score)}</strong>
+                        </div>
+                        <div className="evidence-ai-metric">
+                          <span className="evidence-ai-label">Milestone asked</span>
+                          <strong>{m.title}</strong>
+                        </div>
+                        <div className="evidence-ai-metric">
+                          <span className="evidence-ai-label">Review time</span>
+                          <strong>{currentReviewTime}</strong>
+                        </div>
+                      </div>
+                      <p className="evidence-ai-summary">
+                        {milestoneEvidence.aiReview.summary}
+                      </p>
+                      <div className="evidence-ai-checks">
+                        <div className="evidence-ai-check">
+                          <span className={`neo-tag ${getAiReviewTone(milestoneEvidence.aiReview.verdict)}`}>
+                            {milestoneEvidence.aiReview.verdict === "Verified" ? "Passed" : milestoneEvidence.aiReview.verdict === "Flagged" ? "Flagged" : "Review"}
+                          </span>
+                          <div>
+                            <strong>Image matches the milestone description</strong>
+                            <p>
+                              GPT-4o reviews whether the visible work in the uploaded image lines up
+                              with the milestone description shown above.
+                            </p>
+                          </div>
+                        </div>
+                        <div className="evidence-ai-check">
+                          <span className={`neo-tag ${milestoneEvidence.binding?.passed ? "neo-tag-green" : "neo-tag-red"}`}>
+                            {milestoneEvidence.binding?.passed ? "Passed" : "Needs proof"}
+                          </span>
+                          <div>
+                            <strong>Campaign-specific proof marker</strong>
+                            <p>
+                              VeraFund checks whether the image appears tied to this exact campaign
+                              and milestone, not just a generic construction photo.
+                            </p>
+                          </div>
+                        </div>
+                        <div className="evidence-ai-check">
+                          <span className={`neo-tag ${milestoneEvidence.geospatial ? getGeospatialTone(milestoneEvidence.geospatial.status) : "neo-tag-outline"}`}>
+                            {milestoneEvidence.geospatial?.status || "Pending"}
+                          </span>
+                          <div>
+                            <strong>Location and context consistency</strong>
+                            <p>
+                              GPS, locality, and other context checks are compared against the
+                              claimed project site to support the AI decision.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   {(milestoneEvidence?.authenticity || milestoneEvidence?.geospatial || milestoneEvidence?.binding || milestoneEvidence?.aiReview) && (
                     <div className="evidence-summary-card">
                       {milestoneEvidence.authenticity && (
@@ -1284,15 +1467,7 @@ export default function CampaignDetail({ wallet }: DetailProps) {
                       )}
                       {milestoneEvidence.aiReview && (
                         <div className="evidence-summary-row">
-                          <span
-                            className={`neo-tag ${
-                              milestoneEvidence.aiReview.verdict === "Flagged"
-                                ? "neo-tag-red"
-                                : milestoneEvidence.aiReview.verdict === "Verified"
-                                  ? "neo-tag-green"
-                                  : "neo-tag-yellow"
-                            }`}
-                          >
+                          <span className={`neo-tag ${getAiReviewTone(milestoneEvidence.aiReview.verdict)}`}>
                             OpenAI visual check: {milestoneEvidence.aiReview.verdict}
                           </span>
                           <span className="profile-inline-stat">
@@ -1334,11 +1509,6 @@ export default function CampaignDetail({ wallet }: DetailProps) {
                       )}
                       {milestoneEvidence.geospatial?.summary && (
                         <p className="evidence-summary-copy">{milestoneEvidence.geospatial.summary}</p>
-                      )}
-                      {milestoneEvidence.aiReview?.summary && (
-                        <p className="evidence-summary-copy">
-                          OpenAI check: {milestoneEvidence.aiReview.summary}
-                        </p>
                       )}
                       {milestoneEvidence.geospatial?.keyClues?.length ? (
                         <div className="creator-profile-pill-row" style={{ marginTop: 10 }}>
@@ -1566,17 +1736,23 @@ export default function CampaignDetail({ wallet }: DetailProps) {
                       <button
                         className="neo-btn neo-btn-primary"
                         onClick={() => handleVote(m.id, true)}
-                        disabled={votingId === m.id}
+                        disabled={votingId === m.id || hasCurrentWalletVoted}
                       >
-                        Approve
+                        {hasCurrentWalletVoted ? "Vote submitted" : "Approve"}
                       </button>
                       <button
                         className="neo-btn neo-btn-danger"
                         onClick={() => handleVote(m.id, false)}
-                        disabled={votingId === m.id}
+                        disabled={votingId === m.id || hasCurrentWalletVoted}
                       >
                         Challenge
                       </button>
+                    </div>
+                  )}
+
+                  {votingOpen && wallet.account && !isNGO && hasCurrentWalletVoted && (
+                    <div className="milestone-gate-banner" style={{ marginTop: 12 }}>
+                      This wallet has already voted on this milestone. A second vote is not allowed.
                     </div>
                   )}
 
@@ -1616,10 +1792,23 @@ export default function CampaignDetail({ wallet }: DetailProps) {
                   <p style={{ fontWeight: 700, marginBottom: 8 }}>Submit Evidence</p>
                   {address && (
                     <div className="milestone-gate-banner" style={{ marginBottom: 12 }}>
-                      <strong>Include this proof code in the photos if possible:</strong>{" "}
-                      <span style={{ fontFamily: "var(--font-mono)" }}>{buildProofCode(address, m.id)}</span>
-                      . Showing this code on a board, paper, or sign helps prove the images were
-                      captured specifically for this campaign update.
+                      <strong>Show this milestone marker in at least one photo:</strong>{" "}
+                      <span style={{ fontFamily: "var(--font-mono)" }}>
+                        {buildProofMarker(address, m.id, m.title)}
+                      </span>
+                      . This marker is unique to Milestone {m.id} and should be visible on a
+                      board, paper, or printed sign at the site.
+                      <div style={{ marginTop: 8 }}>
+                        <strong>Backup proof code:</strong>{" "}
+                        <span style={{ fontFamily: "var(--font-mono)" }}>
+                          {buildProofCode(address, m.id)}
+                        </span>
+                      </div>
+                      <div style={{ marginTop: 8 }}>
+                        Use wording tied to this exact update, such as the milestone title{" "}
+                        <strong>{m.title}</strong>, so images cannot be reused across different
+                        milestone submissions for this campaign.
+                      </div>
                     </div>
                   )}
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>

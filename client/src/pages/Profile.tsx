@@ -321,7 +321,6 @@ export default function Profile({ wallet }: ProfileProps) {
     0
   );
   const creatorCompletion = useMemo(() => getCreatorProfileCompletion(creatorProfile), [creatorProfile]);
-  const profileStatusLabel = creatorCompletion.isComplete ? "Ready" : "Needs details";
   const missingProfileFieldsLabel = creatorCompletion.missing
     .map((field) => CREATOR_FIELD_LABELS[field] || field)
     .join(", ");
@@ -558,10 +557,6 @@ export default function Profile({ wallet }: ProfileProps) {
         <div className="stat-card">
           <div className="stat-value">{formatEth(totalDonated, 3)}</div>
           <div className="stat-label">ETH Donated</div>
-        </div>
-        <div className="stat-card stat-card-accent">
-          <div className="stat-value">{profileStatusLabel}</div>
-          <div className="stat-label">Organizer Profile</div>
         </div>
       </div>
 

@@ -19,6 +19,25 @@ function isAllowedImageMimeType(mimeType) {
   return ALLOWED_IMAGE_MIME_TYPES.has(String(mimeType || "").toLowerCase());
 }
 
+function parseDataUrlImage(dataUrl) {
+  if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:")) return null;
+
+  const match = dataUrl.match(/^data:(.+?);base64,(.+)$/);
+  if (!match) return null;
+
+  const mimeType = String(match[1] || "").toLowerCase();
+  if (!isAllowedImageMimeType(mimeType)) {
+    throw new Error("Only JPEG, PNG, WEBP, and HEIC images are allowed.");
+  }
+
+  const buffer = Buffer.from(match[2], "base64");
+  if (buffer.length > MAX_IMAGE_SIZE_BYTES) {
+    throw new Error("Images must be 10 MB or smaller.");
+  }
+
+  return { mimeType, buffer };
+}
+
 function parseCategories(rawValue) {
   if (Array.isArray(rawValue)) {
     return Array.from(new Set(rawValue.map((entry) => String(entry || "").trim()).filter(Boolean))).slice(0, 2);
@@ -67,15 +86,11 @@ const upload = multer({
 });
 
 async function pinDataUrlToIpfs(pinata, dataUrl, fallbackName) {
-  if (typeof dataUrl !== "string" || !dataUrl.startsWith("data:")) return null;
+  const parsed = parseDataUrlImage(dataUrl);
+  if (!parsed) return null;
 
-  const match = dataUrl.match(/^data:(.+?);base64,(.+)$/);
-  if (!match) return null;
-
-  const mimeType = match[1];
-  const base64 = match[2];
+  const { mimeType, buffer } = parsed;
   const extension = mimeType.split("/")[1] || "png";
-  const buffer = Buffer.from(base64, "base64");
   const stream = Readable.from(buffer);
   stream.path = `${fallbackName}.${extension}`;
 

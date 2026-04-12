@@ -342,26 +342,41 @@ export default function Home({ wallet }: HomeProps) {
             </div>
             <div className="campaign-filter-select">
               <label className="campaign-filter-label">Categories</label>
-              <div className="category-picker-grid category-picker-grid-compact">
-                {availableCategories.map((category) => {
-                  const isSelected = categoryFilters.includes(category);
+              <details className="category-dropdown">
+                <summary className="category-dropdown-trigger">
+                  <span>
+                    {categoryFilters.length === 0
+                      ? "All categories"
+                      : categoryFilters.join(", ")}
+                  </span>
+                  <span className="category-dropdown-caret" aria-hidden="true">
+                    ▾
+                  </span>
+                </summary>
+                <div className="category-dropdown-panel">
+                  <div className="category-dropdown-options">
+                    {availableCategories.map((category) => {
+                      const isSelected = categoryFilters.includes(category);
 
-                  return (
-                    <button
-                      key={category}
-                      type="button"
-                      className={`category-chip ${isSelected ? "is-selected" : ""}`}
-                      onClick={() => toggleCategoryFilter(category)}
-                      aria-pressed={isSelected}
-                    >
-                      {category}
-                    </button>
-                  );
-                })}
-              </div>
-              <p className="form-hint">
-                Choose up to 2 categories. Leave all unselected to show every campaign.
-              </p>
+                      return (
+                        <button
+                          key={category}
+                          type="button"
+                          className={`category-option ${isSelected ? "is-selected" : ""}`}
+                          onClick={() => toggleCategoryFilter(category)}
+                          aria-pressed={isSelected}
+                        >
+                          <span>{category}</span>
+                          {isSelected && <span aria-hidden="true">✓</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="form-hint" style={{ marginTop: 12 }}>
+                    Choose up to 2 categories. Leave all unselected to show every campaign.
+                  </p>
+                </div>
+              </details>
             </div>
             <div className="campaign-filter-select">
               <label className="campaign-filter-label">Status</label>

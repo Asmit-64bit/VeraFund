@@ -2,6 +2,7 @@ const express = require("express");
 const { ethers } = require("ethers");
 const {
   buildProofCode,
+  buildProofMarker,
   fetchIpfsImageContent,
   summarizeAuthenticityChecks,
   summarizeCampaignBindingChecks,
@@ -116,6 +117,7 @@ router.post("/verify-milestone", async (req, res) => {
     const authenticitySummary = summarizeAuthenticityChecks(uploads);
     const geospatialSummary = summarizeGeospatialChecks(uploads, claimedLocation);
     const expectedProofCode = proofCode || buildProofCode(campaignAddress, milestoneId);
+    const expectedProofMarker = buildProofMarker(campaignAddress, milestoneId, milestoneTitle);
     const previousMilestoneMatches = findPreviousEvidenceMatches(
       campaignAddress,
       milestoneId,
@@ -145,10 +147,10 @@ Return ONLY a JSON object in this format:
 { "status": "<Present|Partial|Missing|Mismatch|Insufficient>", "confidence": <integer 0-100>, "observedProofCode": "<string or empty>", "campaignSpecificity": "<Strong|Moderate|Weak>", "summary": "<2 sentences max>", "notes": ["<note1>", "<note2>"] }
 
 Use these rules:
-- "Present" means the exact proof code is clearly visible or the evidence is strongly campaign-specific.
-- "Partial" means there are some campaign-specific signals but the proof code is unclear or incomplete.
-- "Missing" means there is no visible proof code and the evidence could be generic.
-- "Mismatch" means the visible code or visual context conflicts with the expected campaign or milestone.
+- "Present" means the exact proof code or exact milestone marker phrase is clearly visible, and the evidence is strongly campaign-specific.
+- "Partial" means there are some campaign-specific signals but the proof code or marker phrase is unclear or incomplete.
+- "Missing" means there is no visible proof code or marker phrase and the evidence could be generic.
+- "Mismatch" means the visible code, marker phrase, or visual context conflicts with the expected campaign or milestone.
 - "Insufficient" means the images do not contain enough information to decide.
 
 Be conservative. If the evidence could plausibly be a generic or recycled image, prefer Missing or Insufficient.`,
@@ -162,6 +164,7 @@ Be conservative. If the evidence could plausibly be a generic or recycled image,
 Milestone title: ${milestoneTitle}
 Milestone description: ${milestoneDescription}
 Expected proof code: ${expectedProofCode}
+Expected milestone marker phrase: ${expectedProofMarker}
 Earlier verified milestone history: ${evidenceHistorySummary}
 Exact duplicate matches against previous milestones: ${
               previousMilestoneMatches.length > 0
@@ -173,7 +176,7 @@ Exact duplicate matches against previous milestones: ${
                     .join(" | ")
                 : "none"
             }
-Review whether these images look captured specifically for this campaign milestone and whether the expected proof code is visible.`,
+Review whether these images look captured specifically for this campaign milestone and whether the expected proof code or milestone marker phrase is visible.`,
           },
           ...imageContents,
         ],
@@ -182,6 +185,7 @@ Review whether these images look captured specifically for this campaign milesto
 
     const bindingSummary = summarizeCampaignBindingChecks({
       proofCode: expectedProofCode,
+      proofMarker: expectedProofMarker,
       bindingReview,
       previousMilestoneMatches,
     });
