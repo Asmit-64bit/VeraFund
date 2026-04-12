@@ -33,27 +33,25 @@ function parseDataUrlImage(dataUrl) {
   return { mimeType, buffer };
 }
 
-function parseCategories(rawValue) {
+function parseCategory(rawValue) {
   if (Array.isArray(rawValue)) {
-    return Array.from(new Set(rawValue.map((entry) => String(entry || "").trim()).filter(Boolean))).slice(0, 2);
+    return String(rawValue[0] || "").trim();
   }
 
   if (typeof rawValue === "string") {
     try {
       const parsed = JSON.parse(rawValue);
       if (Array.isArray(parsed)) {
-        return Array.from(new Set(parsed.map((entry) => String(entry || "").trim()).filter(Boolean))).slice(0, 2);
+        return String(parsed[0] || "").trim();
       }
     } catch {
       // Fall through to plain text parsing.
     }
 
-    return Array.from(
-      new Set(rawValue.split(/\r?\n|,/).map((entry) => entry.trim()).filter(Boolean))
-    ).slice(0, 2);
+    return rawValue.split(/\r?\n|,/).map((entry) => entry.trim()).find(Boolean) || "";
   }
 
-  return [];
+  return "";
 }
 
 function cleanupFiles(files) {
@@ -197,21 +195,16 @@ module.exports = async function handler(req, res) {
       delete creatorProfile.profileImageDataUrl;
     }
 
-    const categories = parseCategories(fields.categories || fields.category);
+    const category = parseCategory(fields.category || fields.categories);
 
     const profile = {
-      category: categories[0] || "",
-      categories,
+      category,
       summary: fields.summary || "",
       locationLabel: fields.locationLabel || "",
       beneficiary: fields.beneficiary || "",
       organizationType: fields.organizationType || "",
       foundedYear: fields.foundedYear || "",
       website: fields.website || "",
-      instagram: fields.instagram || "",
-      facebook: fields.facebook || "",
-      twitter: fields.twitter || "",
-      linkedin: fields.linkedin || "",
       organizationBio: fields.organizationBio || "",
       useOfFunds: fields.useOfFunds || "",
       proofLinks,

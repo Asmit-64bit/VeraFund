@@ -25,7 +25,7 @@ const walletMetadata = {
   name: "VeraFund",
   description: "Transparent milestone-based crowdfunding for social impact.",
   url: "https://verafund.vercel.app",
-  icons: ["https://verafund.vercel.app/impactfund-logo.png"],
+  icons: ["https://verafund.vercel.app/assets/veraFundLogo.png"],
 };
 
 const recommendedWallets = [

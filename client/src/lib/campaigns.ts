@@ -12,8 +12,8 @@ export const CAMPAIGN_CATEGORIES = [
 
 export type CampaignCategory = (typeof CAMPAIGN_CATEGORIES)[number];
 
-const CATEGORIES_PREFIX = "[Categories:";
-const LEGACY_CATEGORY_PREFIX = "[Category:";
+const CATEGORY_PREFIX = "[Category:";
+const LEGACY_CATEGORIES_PREFIX = "[Categories:";
 
 function matchKnownCategory(value: string | null | undefined): CampaignCategory | null {
   if (!value) return null;
@@ -25,51 +25,52 @@ function matchKnownCategory(value: string | null | undefined): CampaignCategory 
   return matchedCategory ?? "Others";
 }
 
-export function normalizeCampaignCategories(value: unknown): CampaignCategory[] {
+export function normalizeCampaignCategory(value: unknown): CampaignCategory | null {
   if (Array.isArray(value)) {
-    return Array.from(
-      new Set(value.map((entry) => matchKnownCategory(String(entry || ""))).filter(Boolean))
-    ).slice(0, 2) as CampaignCategory[];
+    for (const entry of value) {
+      const matchedCategory = matchKnownCategory(String(entry || ""));
+      if (matchedCategory) {
+        return matchedCategory;
+      }
+    }
+
+    return null;
   }
 
   if (typeof value === "string") {
-    const categories = value
-      .split(/\r?\n|,/)
-      .map((entry) => matchKnownCategory(entry))
-      .filter(Boolean);
-
-    return Array.from(new Set(categories)).slice(0, 2) as CampaignCategory[];
+    const firstCandidate = value.split(/\r?\n|,/).map((entry) => entry.trim()).find(Boolean);
+    return matchKnownCategory(firstCandidate);
   }
 
-  return [];
+  return null;
 }
 
-export function serializeCampaignDescription(
-  description: string,
-  categories: CampaignCategory[]
-): string {
-  const normalizedCategories = normalizeCampaignCategories(categories);
-  if (normalizedCategories.length === 0) {
+export function normalizeCampaignCategories(value: unknown): CampaignCategory[] {
+  const category = normalizeCampaignCategory(value);
+  return category ? [category] : [];
+}
+
+export function serializeCampaignDescription(description: string, category: CampaignCategory | null) {
+  const normalizedCategory = normalizeCampaignCategory(category);
+  if (!normalizedCategory) {
     return description.trim();
   }
 
-  return `${CATEGORIES_PREFIX} ${normalizedCategories.join(", ")}]\n\n${description.trim()}`;
+  return `${CATEGORY_PREFIX} ${normalizedCategory}]\n\n${description.trim()}`;
 }
 
 export function parseCampaignDescription(rawDescription: string): {
-  categories: CampaignCategory[];
   category: CampaignCategory | null;
   description: string;
 } {
-  const prefix = rawDescription.startsWith(CATEGORIES_PREFIX)
-    ? CATEGORIES_PREFIX
-    : rawDescription.startsWith(LEGACY_CATEGORY_PREFIX)
-      ? LEGACY_CATEGORY_PREFIX
+  const prefix = rawDescription.startsWith(CATEGORY_PREFIX)
+    ? CATEGORY_PREFIX
+    : rawDescription.startsWith(LEGACY_CATEGORIES_PREFIX)
+      ? LEGACY_CATEGORIES_PREFIX
       : null;
 
   if (!prefix) {
     return {
-      categories: [],
       category: null,
       description: rawDescription,
     };
@@ -78,24 +79,17 @@ export function parseCampaignDescription(rawDescription: string): {
   const closingBracketIndex = rawDescription.indexOf("]");
   if (closingBracketIndex === -1) {
     return {
-      categories: [],
       category: null,
       description: rawDescription,
     };
   }
 
-  const candidateCategory = rawDescription
-    .slice(prefix.length, closingBracketIndex)
-    .trim();
-  const categories = normalizeCampaignCategories(candidateCategory);
+  const category = normalizeCampaignCategory(
+    rawDescription.slice(prefix.length, closingBracketIndex).trim()
+  );
 
   return {
-    categories,
-    category: categories[0] ?? null,
+    category,
     description: rawDescription.slice(closingBracketIndex + 1).trim(),
   };
-}
-
-export function normalizeCampaignCategory(value: string | null | undefined): CampaignCategory | null {
-  return normalizeCampaignCategories(value)[0] || null;
 }

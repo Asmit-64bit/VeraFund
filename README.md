@@ -1,6 +1,6 @@
 # VeraFund
 
-![VeraFund Banner](./veraFundBanner.png)
+![VeraFund Banner](./client/public/assets/veraFundBanner.png)
 
 VeraFund is a milestone-based donation escrow platform built on Sepolia. Donors fund campaigns through a smart contract, organisers unlock money only after milestone proof is submitted, and donors can inspect what happened through a readable audit trail instead of raw blockchain logs.
 
@@ -59,7 +59,6 @@ Main user-facing flows:
 - vote on milestones
 - inspect audit trails
 - view profile and dashboard pages
-- generate shareable impact cards
 
 ### Backend and deployment
 
@@ -209,13 +208,13 @@ Local URLs:
 7. Review the AI panel, authenticity checks, and geospatial review.
 8. Vote as a donor.
 9. Resolve the milestone when the vote completes or when all donor weight has voted.
-10. Inspect the audit trail and share the generated impact card.
+10. Inspect the audit trail and donor-facing verification output.
 
 ## Development notes
 
 - The contract test suite passes with `61 passing`.
 - The client production build is clean.
-- Category selection supports up to 2 categories.
+- Each campaign uses one primary category for cleaner discovery and filtering.
 - Campaign media is proxied through the app for safer display on restrictive networks.
 - Some older campaigns deployed before the newer unlock model may still behave differently from current campaigns.
 

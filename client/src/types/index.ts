@@ -5,7 +5,6 @@
 export interface CampaignInfo {
   address: string;
   factoryAddress?: string | null;
-  fundingUnlockModel?: "legacy_goal_gated" | "threshold_gated";
   ngoAddress: string;
   title: string;
   description: string;
@@ -30,10 +29,6 @@ export interface CreatorProfile {
   causes?: string[];
   associatedOrganizations?: string[];
   website?: string;
-  instagram?: string;
-  facebook?: string;
-  twitter?: string;
-  linkedin?: string;
   profileImageUrl?: string | null;
   profileImageDataUrl?: string | null;
 }
@@ -41,17 +36,12 @@ export interface CreatorProfile {
 export interface CampaignProfile {
   coverImageCid?: string | null;
   category?: string;
-  categories?: string[];
   summary?: string;
   locationLabel?: string;
   beneficiary?: string;
   organizationType?: string;
   foundedYear?: string;
   website?: string;
-  instagram?: string;
-  facebook?: string;
-  twitter?: string;
-  linkedin?: string;
   organizationBio?: string;
   useOfFunds?: string;
   proofLinks?: string[];

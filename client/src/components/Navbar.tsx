@@ -31,7 +31,7 @@ export default function Navbar({ wallet }: NavbarProps) {
   return (
     <nav className="navbar">
       <Link to="/" className="navbar-logo">
-        <img src="/veraFundLogo.png" alt="VeraFund logo" className="navbar-logo-image" />
+        <img src="/assets/veraFundLogo.png" alt="VeraFund logo" className="navbar-logo-image" />
         <span>verafund</span>
       </Link>
 

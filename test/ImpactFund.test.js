@@ -64,7 +64,7 @@ describe("ImpactFund — Full Contract Suite (v2: Bootstrap + Quorum + AI)", fun
       ).to.be.revertedWith("DonorNFT: not authorized");
     });
 
-    it("should start donors at Bronze tier", async function () {
+    it("should mint a donor NFT with campaign-backed metadata", async function () {
       const milestones = milestoneInputs(DEADLINE);
       await factory.connect(ngo).createCampaign(
         TITLE, DESCRIPTION, NGO_NAME, BOOTSTRAP_PERCENT, milestones, GOAL, DEADLINE
@@ -75,12 +75,14 @@ describe("ImpactFund — Full Contract Suite (v2: Bootstrap + Quorum + AI)", fun
       await campaign.connect(donor1).donate({ value: ethers.parseEther("0.1") });
       const tokenId = await donorNFT.donorCampaignToken(await campaign.getAddress(), donor1.address);
 
-      expect(await donorNFT.getSupporterTier(donor1.address)).to.equal(0);
       const tokenUri = await donorNFT.tokenURI(tokenId);
       const encodedMetadata = tokenUri.replace("data:application/json;base64,", "");
       const metadata = JSON.parse(Buffer.from(encodedMetadata, "base64").toString("utf8"));
 
-      expect(metadata.attributes.find((attribute) => attribute.trait_type === "Supporter Tier")?.value).to.equal("Bronze");
+      expect(metadata.attributes.find((attribute) => attribute.trait_type === "Campaign Address")?.value)
+        .to.equal((await campaign.getAddress()).toLowerCase());
+      expect(metadata.attributes.find((attribute) => attribute.trait_type === "Donor Address")?.value)
+        .to.equal(donor1.address.toLowerCase());
     });
   });
 
@@ -643,25 +645,6 @@ describe("ImpactFund — Full Contract Suite (v2: Bootstrap + Quorum + AI)", fun
         expect(info.status).to.equal(2); // Completed
       });
 
-      it("should upgrade donors to Silver when a funded campaign completes", async function () {
-        await campaign.connect(donor1).vote(1, true);
-        await campaign.connect(donor2).vote(1, true);
-        await ethers.provider.send("evm_increaseTime", [7 * 86400 + 1]);
-        await ethers.provider.send("evm_mine");
-        await campaign.resolveVote(1);
-
-        for (let i = 2; i <= 3; i++) {
-          await campaign.connect(ngo).submitMilestone(i, `QmHash${i}`);
-          await campaign.connect(donor1).vote(i, true);
-          await campaign.connect(donor2).vote(i, true);
-          await ethers.provider.send("evm_increaseTime", [7 * 86400 + 1]);
-          await ethers.provider.send("evm_mine");
-          await campaign.resolveVote(i);
-        }
-
-        expect(await donorNFT.successfulCampaignsByDonor(donor1.address)).to.equal(1);
-        expect(await donorNFT.getSupporterTier(donor1.address)).to.equal(1);
-      });
     });
 
     // ── Refund ──

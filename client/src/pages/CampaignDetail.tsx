@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { ethers } from "ethers";
 import toast from "react-hot-toast";
-import ImpactCardShare from "../components/ImpactCardShare";
 import { useCampaign } from "../hooks/useCampaign";
 import {
   CAMPAIGN_ABI,
@@ -236,7 +235,6 @@ function getMilestoneDisplayState(
   campaign: CampaignInfo,
   milestones: MilestoneInfo[]
 ): { label: string; tagClass: string; helperText: string | null } {
-  const usesLegacyGoalGate = campaign.fundingUnlockModel === "legacy_goal_gated";
   const unlockPercent = getMilestoneUnlockPercent(milestone, milestones);
   const bootstrapUnlockPercent = milestones[0]?.fundPercent ?? campaign.bootstrapPercent;
   const fundingUnlocked =
@@ -244,17 +242,6 @@ function getMilestoneDisplayState(
     campaign.raisedAmount * 100n >= campaign.goalAmount * BigInt(unlockPercent);
   const previousMilestoneApproved =
     milestone.id === 0 || milestones[milestone.id - 1]?.status === 3;
-
-  if (usesLegacyGoalGate && campaign.status === 0 && milestone.status === 0) {
-    return {
-      label: milestone.id === 0 ? "Locked until funded" : "Awaiting full funding",
-      tagClass: "neo-tag-outline",
-      helperText:
-        milestone.id === 0
-          ? "This legacy campaign releases bootstrap only once the fundraising goal reaches 100%."
-          : "This legacy campaign keeps execution milestones locked until fundraising reaches 100%.",
-    };
-  }
 
   if (milestone.status === 0 && milestone.id === 0 && !campaign.bootstrapReleased) {
     return {
@@ -313,10 +300,6 @@ function isMilestoneReadyForSubmission(
   campaign: CampaignInfo,
   milestones: MilestoneInfo[]
 ) {
-  if (campaign.fundingUnlockModel === "legacy_goal_gated") {
-    return milestone.id > 0 && milestone.status === 0 && campaign.status === 1;
-  }
-
   if (milestone.id === 0 || milestone.status !== 0 || !campaign.bootstrapReleased) {
     return false;
   }
@@ -365,7 +348,6 @@ export default function CampaignDetail({ wallet }: DetailProps) {
   const [donateAmount, setDonateAmount] = useState("");
   const [donating, setDonating] = useState(false);
   const [txHash, setTxHash] = useState<string | null>(null);
-  const [lastDonationWei, setLastDonationWei] = useState<bigint | null>(null);
   const [isDonateInputHovered, setIsDonateInputHovered] = useState(false);
   const [isDonateInputFocused, setIsDonateInputFocused] = useState(false);
 
@@ -402,12 +384,8 @@ export default function CampaignDetail({ wallet }: DetailProps) {
     null;
   const remainingGoalWei = campaign ? campaign.goalAmount - campaign.raisedAmount : 0n;
   const remainingGoalEth = campaign ? formatEth(remainingGoalWei) : "0";
-  const usesLegacyGoalGate = campaign?.fundingUnlockModel === "legacy_goal_gated";
-  const bootstrapGrantWei = campaign
-    ? (campaign.goalAmount * BigInt(campaign.bootstrapPercent)) / 100n
-    : 0n;
   const campaignCategoryLabels = normalizeCampaignCategories(
-    campaign?.profile?.categories ?? campaign?.profile?.category
+    campaign?.profile?.category
   );
   const currentReviewTime = useMemo(() => new Date().toLocaleString(), []);
   const parsedDonateAmount =
@@ -608,7 +586,6 @@ export default function CampaignDetail({ wallet }: DetailProps) {
       setTxHash(tx.hash);
       toast.loading("Waiting for confirmation...", { id: "donate" });
       await tx.wait();
-      setLastDonationWei(parsedAmount);
       toast.success("Donation confirmed!", { id: "donate" });
       setDonateAmount("");
 
@@ -875,7 +852,7 @@ export default function CampaignDetail({ wallet }: DetailProps) {
   const bootstrapUnlockPercent = milestones[0]?.fundPercent ?? campaign.bootstrapPercent;
   const bootstrapUnlockWei =
     campaign.goalAmount > 0n ? (campaign.goalAmount * BigInt(bootstrapUnlockPercent)) / 100n : 0n;
-  const bootstrapMarkerPercent = usesLegacyGoalGate ? 100 : Math.min(bootstrapUnlockPercent, 100);
+  const bootstrapMarkerPercent = Math.min(bootstrapUnlockPercent, 100);
   const bootstrapMarkerEdgeClass =
     bootstrapMarkerPercent <= 8
       ? "is-left-edge"
@@ -903,14 +880,6 @@ export default function CampaignDetail({ wallet }: DetailProps) {
     bootstrapUnlockWei > 0n &&
     campaign.raisedAmount < bootstrapUnlockWei &&
     projectedRaisedWei >= bootstrapUnlockWei;
-  const campaignShareUrl =
-    typeof window !== "undefined"
-      ? window.location.href
-      : `https://verafund.app/campaign/${address}`;
-  const donorShareAmount = lastDonationWei ?? campaign.userDonation ?? 0n;
-  const showDonorImpactCard = !isNGO && !!wallet.account && donorShareAmount > 0n;
-  const showOrganizerImpactCard = isNGO && campaign.status === 2;
-
   const getEvidenceForMilestone = (milestone: MilestoneInfo) => {
     const cached = evidenceMetadataByMilestone[milestone.id];
     if (cached?.uploads?.length) return cached;
@@ -1022,11 +991,11 @@ export default function CampaignDetail({ wallet }: DetailProps) {
                 </div>
               )}
               <div className="campaign-profile-links" style={{ marginTop: 16 }}>
-                {campaign.profile.creatorProfile.website && <a className="tx-link" href={campaign.profile.creatorProfile.website} target="_blank" rel="noreferrer">Website</a>}
-                {campaign.profile.creatorProfile.instagram && <a className="tx-link" href={campaign.profile.creatorProfile.instagram} target="_blank" rel="noreferrer">Instagram</a>}
-                {campaign.profile.creatorProfile.facebook && <a className="tx-link" href={campaign.profile.creatorProfile.facebook} target="_blank" rel="noreferrer">Facebook</a>}
-                {campaign.profile.creatorProfile.twitter && <a className="tx-link" href={campaign.profile.creatorProfile.twitter} target="_blank" rel="noreferrer">Twitter / X</a>}
-                {campaign.profile.creatorProfile.linkedin && <a className="tx-link" href={campaign.profile.creatorProfile.linkedin} target="_blank" rel="noreferrer">LinkedIn</a>}
+                {campaign.profile.creatorProfile.website && (
+                  <a className="tx-link" href={campaign.profile.creatorProfile.website} target="_blank" rel="noreferrer">
+                    Website
+                  </a>
+                )}
               </div>
             </div>
           )}
@@ -1052,11 +1021,7 @@ export default function CampaignDetail({ wallet }: DetailProps) {
               <h4>External links</h4>
               <div className="campaign-profile-links">
                 {campaign.profile.website && <a className="tx-link" href={campaign.profile.website} target="_blank" rel="noreferrer">Website</a>}
-                {campaign.profile.instagram && <a className="tx-link" href={campaign.profile.instagram} target="_blank" rel="noreferrer">Instagram</a>}
-                {campaign.profile.facebook && <a className="tx-link" href={campaign.profile.facebook} target="_blank" rel="noreferrer">Facebook</a>}
-                {campaign.profile.twitter && <a className="tx-link" href={campaign.profile.twitter} target="_blank" rel="noreferrer">Twitter / X</a>}
-                {campaign.profile.linkedin && <a className="tx-link" href={campaign.profile.linkedin} target="_blank" rel="noreferrer">LinkedIn</a>}
-                {(!campaign.profile.website && !campaign.profile.instagram && !campaign.profile.facebook && !campaign.profile.twitter && !campaign.profile.linkedin) && (
+                {!campaign.profile.website && (
                   <p>No external links provided.</p>
                 )}
               </div>
@@ -1247,48 +1212,13 @@ export default function CampaignDetail({ wallet }: DetailProps) {
         </div>
       )}
 
-      {(showDonorImpactCard || showOrganizerImpactCard) && (
-        <div className="detail-section">
-          <h3 className="detail-section-title">
-            {showOrganizerImpactCard ? "Campaign Impact Card" : "Share Your Impact"}
-          </h3>
-          <div className="impact-card-stack">
-            {showDonorImpactCard && (
-              <ImpactCardShare
-                mode="donor"
-                campaignTitle={campaign.title}
-                ngoName={campaign.ngoName}
-                shareUrl={campaignShareUrl}
-                amountLabel={formatEthLabel(donorShareAmount)}
-                txHash={txHash}
-              />
-            )}
-            {showOrganizerImpactCard && (
-              <ImpactCardShare
-                mode="organizer"
-                campaignTitle={campaign.title}
-                ngoName={campaign.ngoName}
-                shareUrl={campaignShareUrl}
-              />
-            )}
-          </div>
-        </div>
-      )}
-
       {/* Donate Box */}
       {wallet.account && fundraisingOpen && (
       <div className="detail-section">
         <h3 className="detail-section-title">Donate</h3>
         <div className="donate-box">
           <div className="donate-info">
-            {usesLegacyGoalGate ? (
-              <>
-                This legacy campaign releases the bootstrap grant only after the full goal is reached.
-                Once donations hit <strong>100%</strong>,{" "}
-                <strong>{campaign.bootstrapPercent}%</strong> ({formatEthLabel(bootstrapGrantWei)})
-                {" "}will be released immediately.
-              </>
-            ) : campaign.bootstrapReleased ? (
+            {campaign.bootstrapReleased ? (
               <>
                 Bootstrap has already been released. New donations now unlock the next execution
                 milestones as their cumulative funding targets are reached.
@@ -1377,13 +1307,7 @@ export default function CampaignDetail({ wallet }: DetailProps) {
         <h3 className="detail-section-title">Milestones</h3>
         {campaign.status !== 2 && campaign.status !== 3 && (
           <div className="milestone-gate-banner">
-            {usesLegacyGoalGate ? (
-              <>
-                <strong>This is a legacy campaign that still uses goal-gated unlocking.</strong>{" "}
-                It is currently {percentLabel}% funded, so bootstrap and later milestones stay
-                locked until fundraising reaches 100%.
-              </>
-            ) : !campaign.bootstrapReleased ? (
+            {!campaign.bootstrapReleased ? (
               <>
                 <strong>Bootstrap unlocks first at {bootstrapUnlockPercent}% funded.</strong> This
                 campaign is currently {percentLabel}% funded. Once bootstrap is released, each
@@ -1437,9 +1361,7 @@ export default function CampaignDetail({ wallet }: DetailProps) {
 
               <p style={{ fontSize: 14, color: "var(--text-secondary)", marginBottom: 12 }}>
                 {m.id === 0
-                  ? usesLegacyGoalGate
-                    ? "Bootstrap reserve released automatically once the campaign reaches its full funding goal."
-                    : `Bootstrap reserve released automatically once donations reach ${bootstrapUnlockPercent}% of the campaign goal.`
+                  ? `Bootstrap reserve released automatically once donations reach ${bootstrapUnlockPercent}% of the campaign goal.`
                   : m.description}
               </p>
 

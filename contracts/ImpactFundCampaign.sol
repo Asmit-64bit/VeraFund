@@ -446,9 +446,6 @@ contract ImpactFundCampaign is ReentrancyGuard {
         // Check if all milestones are approved → complete campaign
         if (_allMilestonesApproved()) {
             status = CampaignStatus.Completed;
-            for (uint256 i = 0; i < donorList.length; i++) {
-                donorNFTContract.recordCampaignSuccess(donorList[i], address(this));
-            }
         }
     }
 

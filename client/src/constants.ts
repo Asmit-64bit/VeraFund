@@ -1,10 +1,6 @@
 // Contract addresses — deployed on Sepolia
 export const FACTORY_ADDRESS = "0x6A837595E2592d699d48eB2DAcF47Df9493035d2";
-export const LEGACY_FACTORY_ADDRESSES: string[] = [];
-export const READONLY_FACTORY_ADDRESSES = Array.from(
-  new Set([FACTORY_ADDRESS, ...LEGACY_FACTORY_ADDRESSES])
-);
-export const DONOR_NFT_ADDRESS = "0x25c992175fE2A0Cc31F381f0C6894B3376353BCd";
+export const READONLY_FACTORY_ADDRESSES = [FACTORY_ADDRESS] as const;
 
 // Backend API
 export const API_BASE = import.meta.env.VITE_API_BASE || "/api";
@@ -58,16 +54,6 @@ export const CAMPAIGN_ABI = [
   "event MilestoneRejected(uint256 indexed milestoneId, bool resolvedByAI)",
   "event RefundIssued(address indexed donor, uint256 amount)",
   "event CampaignMarkedStale(uint256 indexed milestoneId, uint256 refundPool)",
-] as const;
-
-export const DONOR_NFT_ABI = [
-  "function balanceOf(address owner) external view returns (uint256)",
-  "function tokenData(uint256 tokenId) external view returns (tuple(address campaignAddress, address donor, uint256 amountDonated, uint256 timestamp))",
-  "function hasDonorToken(address campaign, address donor) external view returns (bool)",
-  "function donorCampaignToken(address campaign, address donor) external view returns (uint256)",
-  "function successfulCampaignsByDonor(address donor) external view returns (uint256)",
-  "function getSupporterTier(address donor) external view returns (uint8)",
-  "function tokenURI(uint256 tokenId) external view returns (string)",
 ] as const;
 
 // Status labels

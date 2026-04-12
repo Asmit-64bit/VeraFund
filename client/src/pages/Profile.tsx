@@ -56,10 +56,6 @@ const emptyCreatorProfile: CreatorProfile = {
   causes: [],
   associatedOrganizations: [],
   website: "",
-  instagram: "",
-  facebook: "",
-  twitter: "",
-  linkedin: "",
   profileImageUrl: null,
   profileImageDataUrl: null,
 };
@@ -544,27 +540,14 @@ export default function Profile({ wallet }: ProfileProps) {
               </div>
             </div>
 
-            <div className="profile-link-grid">
-              <div className="form-group">
-                <OptionalLabel>Website</OptionalLabel>
-                <input className="neo-input" value={creatorProfile.website || ""} onChange={handleProfileFieldChange("website")} placeholder="https://yourwebsite.org" />
-              </div>
-              <div className="form-group">
-                <OptionalLabel>Instagram</OptionalLabel>
-                <input className="neo-input" value={creatorProfile.instagram || ""} onChange={handleProfileFieldChange("instagram")} placeholder="instagram.com/yourhandle" />
-              </div>
-              <div className="form-group">
-                <OptionalLabel>Facebook</OptionalLabel>
-                <input className="neo-input" value={creatorProfile.facebook || ""} onChange={handleProfileFieldChange("facebook")} placeholder="facebook.com/yourpage" />
-              </div>
-              <div className="form-group">
-                <OptionalLabel>Twitter / X</OptionalLabel>
-                <input className="neo-input" value={creatorProfile.twitter || ""} onChange={handleProfileFieldChange("twitter")} placeholder="x.com/yourhandle" />
-              </div>
-              <div className="form-group">
-                <OptionalLabel>LinkedIn</OptionalLabel>
-                <input className="neo-input" value={creatorProfile.linkedin || ""} onChange={handleProfileFieldChange("linkedin")} placeholder="linkedin.com/in/yourprofile" />
-              </div>
+            <div className="form-group">
+              <OptionalLabel>Website</OptionalLabel>
+              <input
+                className="neo-input"
+                value={creatorProfile.website || ""}
+                onChange={handleProfileFieldChange("website")}
+                placeholder="https://yourwebsite.org"
+              />
             </div>
 
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>

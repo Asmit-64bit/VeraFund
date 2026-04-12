@@ -1,4 +1,4 @@
-import { normalizeCampaignCategories } from "./campaigns";
+import { normalizeCampaignCategory } from "./campaigns";
 import type { CampaignProfile, CreatorProfile } from "../types";
 
 const PROFILE_CID_MARKER = "[PROFILE_CID:";
@@ -148,22 +148,19 @@ export function normalizeCampaignProfile(
   if (!profile) return null;
 
   const creatorProfile = profile.creatorProfile || null;
-  const categories = normalizeCampaignCategories(profile.categories ?? profile.category);
+  const category = normalizeCampaignCategory(
+    (profile as CampaignProfile & { categories?: unknown }).categories ?? profile.category
+  );
 
   return {
     ...profile,
-    categories,
-    category: categories[0] || "",
+    category: category || "",
     summary: coerceString(profile.summary),
     locationLabel: coerceString(profile.locationLabel),
     beneficiary: coerceString(profile.beneficiary),
     organizationType: coerceString(profile.organizationType),
     foundedYear: coerceString(profile.foundedYear),
     website: coerceString(profile.website),
-    instagram: coerceString(profile.instagram),
-    facebook: coerceString(profile.facebook),
-    twitter: coerceString(profile.twitter),
-    linkedin: coerceString(profile.linkedin),
     organizationBio: coerceString(profile.organizationBio),
     useOfFunds: coerceString(profile.useOfFunds),
     proofLinks: normalizeStringList(profile.proofLinks),
@@ -188,10 +185,6 @@ export function normalizeCampaignProfile(
           causes: normalizeStringList(creatorProfile.causes),
           associatedOrganizations: normalizeStringList(creatorProfile.associatedOrganizations),
           website: creatorProfile.website || "",
-          instagram: creatorProfile.instagram || "",
-          facebook: creatorProfile.facebook || "",
-          twitter: creatorProfile.twitter || "",
-          linkedin: creatorProfile.linkedin || "",
           profileImageUrl: normalizeIpfsAssetUrl(creatorProfile.profileImageUrl),
           profileImageDataUrl: creatorProfile.profileImageDataUrl || null,
         }
@@ -359,14 +352,6 @@ export function joinListToMultiline(values?: string[] | string | null) {
 }
 
 export function sanitizeCreatorProfile(profile: CreatorProfile) {
-  const normalizedLinks = {
-    website: normalizeOptionalUrl(profile.website || ""),
-    instagram: normalizeOptionalUrl(profile.instagram || ""),
-    facebook: normalizeOptionalUrl(profile.facebook || ""),
-    twitter: normalizeOptionalUrl(profile.twitter || ""),
-    linkedin: normalizeOptionalUrl(profile.linkedin || ""),
-  };
-
   return {
     displayName: profile.displayName?.trim() || "",
     roleTitle: profile.roleTitle?.trim() || "",
@@ -374,7 +359,7 @@ export function sanitizeCreatorProfile(profile: CreatorProfile) {
     aboutMe: profile.aboutMe?.trim() || "",
     causes: normalizeStringList(profile.causes),
     associatedOrganizations: normalizeStringList(profile.associatedOrganizations),
-    ...normalizedLinks,
+    website: normalizeOptionalUrl(profile.website || ""),
     profileImageUrl: profile.profileImageUrl || null,
     profileImageDataUrl: profile.profileImageDataUrl || null,
   } satisfies CreatorProfile;

@@ -110,17 +110,13 @@ export default function CreateCampaign({ wallet }: CreateProps) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [ngoName, setNgoName] = useState("");
-  const [selectedCategories, setSelectedCategories] = useState<CampaignCategory[]>(["Education"]);
+  const [selectedCategory, setSelectedCategory] = useState<CampaignCategory>("Education");
   const [summary, setSummary] = useState("");
   const [locationLabel, setLocationLabel] = useState("");
   const [beneficiary, setBeneficiary] = useState("");
   const [organizationType, setOrganizationType] = useState("");
   const [foundedYear, setFoundedYear] = useState("");
   const [website, setWebsite] = useState("");
-  const [instagram, setInstagram] = useState("");
-  const [facebook, setFacebook] = useState("");
-  const [twitter, setTwitter] = useState("");
-  const [linkedin, setLinkedin] = useState("");
   const [organizationBio, setOrganizationBio] = useState("");
   const [useOfFunds, setUseOfFunds] = useState("");
   const [proofLinks, setProofLinks] = useState("");
@@ -193,20 +189,6 @@ export default function CreateCampaign({ wallet }: CreateProps) {
     );
   };
 
-  const toggleCategory = (nextCategory: CampaignCategory) => {
-    setSelectedCategories((current) => {
-      if (current.includes(nextCategory)) {
-        return current.filter((entry) => entry !== nextCategory);
-      }
-
-      if (current.length >= 2) {
-        return [...current.slice(1), nextCategory];
-      }
-
-      return [...current, nextCategory];
-    });
-  };
-
   const addMilestone = () => {
     if (milestones.length >= 5) return;
     setMilestones((prev) => [...prev, emptyMilestone()]);
@@ -225,7 +207,7 @@ export default function CreateCampaign({ wallet }: CreateProps) {
         !!description &&
         !!ngoName &&
         !!summary &&
-        selectedCategories.length > 0 &&
+        !!selectedCategory &&
         !!goalEth &&
         !!campaignDeadline &&
         !basicInfoError &&
@@ -266,18 +248,13 @@ export default function CreateCampaign({ wallet }: CreateProps) {
 
       const profileFormData = new FormData();
       profileFormData.append("title", title);
-      profileFormData.append("category", selectedCategories[0] || "");
-      profileFormData.append("categories", JSON.stringify(selectedCategories));
+      profileFormData.append("category", selectedCategory);
       profileFormData.append("summary", summary);
       profileFormData.append("locationLabel", locationLabel);
       profileFormData.append("beneficiary", beneficiary);
       profileFormData.append("organizationType", organizationType);
       profileFormData.append("foundedYear", foundedYear);
       profileFormData.append("website", normalizeOptionalUrl(website));
-      profileFormData.append("instagram", normalizeOptionalUrl(instagram));
-      profileFormData.append("facebook", normalizeOptionalUrl(facebook));
-      profileFormData.append("twitter", normalizeOptionalUrl(twitter));
-      profileFormData.append("linkedin", normalizeOptionalUrl(linkedin));
       profileFormData.append("organizationBio", organizationBio);
       profileFormData.append("useOfFunds", useOfFunds);
       profileFormData.append("proofLinks", proofLinks);
@@ -465,26 +442,20 @@ export default function CreateCampaign({ wallet }: CreateProps) {
           </div>
           <div className="form-row">
             <div className="form-group">
-              <label className="form-label">Campaign categories</label>
-              <div className="category-picker-grid">
-                {CAMPAIGN_CATEGORIES.map((categoryOption) => {
-                  const isSelected = selectedCategories.includes(categoryOption);
-
-                  return (
-                    <button
-                      key={categoryOption}
-                      type="button"
-                      className={`category-chip ${isSelected ? "is-selected" : ""}`}
-                      onClick={() => toggleCategory(categoryOption)}
-                      aria-pressed={isSelected}
-                    >
-                      {categoryOption}
-                    </button>
-                  );
-                })}
-              </div>
+              <label className="form-label">Campaign category</label>
+              <select
+                className="neo-input"
+                value={selectedCategory}
+                onChange={(event) => setSelectedCategory(event.target.value as CampaignCategory)}
+              >
+                {CAMPAIGN_CATEGORIES.map((categoryOption) => (
+                  <option key={categoryOption} value={categoryOption}>
+                    {categoryOption}
+                  </option>
+                ))}
+              </select>
               <p className="form-hint">
-                Pick up to 2 categories. Donors will be able to filter by either one.
+                Choose the primary category donors should use to discover this campaign.
               </p>
             </div>
             <div className="form-group">
@@ -651,27 +622,14 @@ export default function CreateCampaign({ wallet }: CreateProps) {
               onChange={(e) => setUseOfFunds(e.target.value)}
             />
           </div>
-          <div className="profile-link-grid">
-            <div className="form-group">
-              <label className="form-label">Website</label>
-              <input className="neo-input" placeholder="https://example.org" value={website} onChange={(e) => setWebsite(e.target.value)} />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Instagram</label>
-              <input className="neo-input" placeholder="instagram.com/yourorg" value={instagram} onChange={(e) => setInstagram(e.target.value)} />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Facebook</label>
-              <input className="neo-input" placeholder="facebook.com/yourorg" value={facebook} onChange={(e) => setFacebook(e.target.value)} />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Twitter / X</label>
-              <input className="neo-input" placeholder="x.com/yourorg" value={twitter} onChange={(e) => setTwitter(e.target.value)} />
-            </div>
-            <div className="form-group">
-              <label className="form-label">LinkedIn</label>
-              <input className="neo-input" placeholder="linkedin.com/company/yourorg" value={linkedin} onChange={(e) => setLinkedin(e.target.value)} />
-            </div>
+          <div className="form-group">
+            <label className="form-label">Website</label>
+            <input
+              className="neo-input"
+              placeholder="https://example.org"
+              value={website}
+              onChange={(e) => setWebsite(e.target.value)}
+            />
           </div>
           <div className="form-group">
             <label className="form-label">Reference links</label>
@@ -898,7 +856,7 @@ export default function CreateCampaign({ wallet }: CreateProps) {
               </tr>
               <tr>
                 <td style={{ fontWeight: 700, padding: "6px 0" }}>Category</td>
-                <td>{selectedCategories.join(", ")}</td>
+                <td>{selectedCategory}</td>
               </tr>
               <tr>
                 <td style={{ fontWeight: 700, padding: "6px 0" }}>Location</td>

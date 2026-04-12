@@ -5,8 +5,8 @@ import { CAMPAIGN_STATUS } from "../constants";
 import { formatEth, formatPercent } from "../lib/format";
 import {
   CAMPAIGN_CATEGORIES,
-  normalizeCampaignCategories,
   type CampaignCategory,
+  normalizeCampaignCategory,
 } from "../lib/campaigns";
 import type { WalletState, CampaignInfo } from "../types";
 
@@ -42,9 +42,7 @@ function CampaignCard({ campaign, index }: { campaign: CampaignInfo; index: numb
     campaign.profile?.galleryImages?.[0]?.url ||
     null;
   const [bannerMissing, setBannerMissing] = useState(!bannerSource);
-  const categoryLabels = normalizeCampaignCategories(
-    campaign.profile?.categories ?? campaign.profile?.category
-  );
+  const categoryLabel = normalizeCampaignCategory(campaign.profile?.category);
 
   const handleBannerError = (event: SyntheticEvent<HTMLImageElement>) => {
     event.currentTarget.style.display = "none";
@@ -90,11 +88,9 @@ function CampaignCard({ campaign, index }: { campaign: CampaignInfo; index: numb
               <span>Created by {campaign.profile.creatorProfile.displayName}</span>
             </div>
           )}
-          {(categoryLabels.length > 0 || campaign.profile?.locationLabel) && (
+          {(categoryLabel || campaign.profile?.locationLabel) && (
             <div className="campaign-card-meta-line">
-              {categoryLabels.map((categoryLabel) => (
-                <span key={categoryLabel}>{categoryLabel}</span>
-              ))}
+              {categoryLabel && <span>{categoryLabel}</span>}
               {campaign.profile?.locationLabel && <span>{campaign.profile.locationLabel}</span>}
             </div>
           )}
@@ -189,25 +185,11 @@ function HowItWorks() {
 export default function Home({ wallet }: HomeProps) {
   const { campaigns, loading, error } = useAllCampaigns(wallet.provider);
   const [searchQuery, setSearchQuery] = useState("");
-  const [categoryFilters, setCategoryFilters] = useState<CampaignCategory[]>([]);
+  const [categoryFilter, setCategoryFilter] = useState<CampaignCategory | "All">("All");
   const [statusFilter, setStatusFilter] = useState("All");
 
   const totalRaised = campaigns.reduce((sum, c) => sum + c.raisedAmount, 0n);
   const availableCategories = useMemo(() => CAMPAIGN_CATEGORIES, []);
-
-  const toggleCategoryFilter = (category: CampaignCategory) => {
-    setCategoryFilters((current) => {
-      if (current.includes(category)) {
-        return current.filter((entry) => entry !== category);
-      }
-
-      if (current.length >= 2) {
-        return [...current.slice(1), category];
-      }
-
-      return [...current, category];
-    });
-  };
 
   const filteredCampaigns = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -220,7 +202,6 @@ export default function Home({ wallet }: HomeProps) {
           campaign.ngoName,
           campaign.description,
           campaign.profile?.summary,
-          ...(campaign.profile?.categories || []),
           campaign.profile?.category,
           campaign.profile?.locationLabel,
           campaign.profile?.beneficiary,
@@ -231,21 +212,16 @@ export default function Home({ wallet }: HomeProps) {
           .filter(Boolean)
           .some((value) => value!.toLowerCase().includes(query));
 
-      const normalizedCategories = normalizeCampaignCategories(
-        campaign.profile?.categories ?? campaign.profile?.category
-      );
+      const normalizedCategory = normalizeCampaignCategory(campaign.profile?.category);
       const matchesCategory =
-        categoryFilters.length === 0 ||
-        categoryFilters.some((selectedCategory) =>
-          normalizedCategories.includes(selectedCategory)
-        );
+        categoryFilter === "All" || normalizedCategory === categoryFilter;
 
       const matchesStatus =
         statusFilter === "All" || CAMPAIGN_STATUS[campaign.status] === statusFilter;
 
       return matchesQuery && matchesCategory && matchesStatus;
     });
-  }, [campaigns, searchQuery, categoryFilters, statusFilter]);
+  }, [campaigns, searchQuery, categoryFilter, statusFilter]);
 
   const activeCampaigns = filteredCampaigns.filter((campaign) => campaign.status !== 2);
   const completedCampaigns = filteredCampaigns.filter((campaign) => campaign.status === 2);
@@ -341,42 +317,21 @@ export default function Home({ wallet }: HomeProps) {
               />
             </div>
             <div className="campaign-filter-select">
-              <label className="campaign-filter-label">Categories</label>
-              <details className="category-dropdown">
-                <summary className="category-dropdown-trigger">
-                  <span>
-                    {categoryFilters.length === 0
-                      ? "All categories"
-                      : categoryFilters.join(", ")}
-                  </span>
-                  <span className="category-dropdown-caret" aria-hidden="true">
-                    ▾
-                  </span>
-                </summary>
-                <div className="category-dropdown-panel">
-                  <div className="category-dropdown-options">
-                    {availableCategories.map((category) => {
-                      const isSelected = categoryFilters.includes(category);
-
-                      return (
-                        <button
-                          key={category}
-                          type="button"
-                          className={`category-option ${isSelected ? "is-selected" : ""}`}
-                          onClick={() => toggleCategoryFilter(category)}
-                          aria-pressed={isSelected}
-                        >
-                          <span>{category}</span>
-                          {isSelected && <span aria-hidden="true">✓</span>}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <p className="form-hint" style={{ marginTop: 12 }}>
-                    Choose up to 2 categories. Leave all unselected to show every campaign.
-                  </p>
-                </div>
-              </details>
+              <label className="campaign-filter-label">Category</label>
+              <select
+                className="neo-input"
+                value={categoryFilter}
+                onChange={(event) =>
+                  setCategoryFilter(event.target.value as CampaignCategory | "All")
+                }
+              >
+                <option value="All">All categories</option>
+                {availableCategories.map((category) => (
+                  <option key={category} value={category}>
+                    {category}
+                  </option>
+                ))}
+              </select>
             </div>
             <div className="campaign-filter-select">
               <label className="campaign-filter-label">Status</label>

@@ -37,12 +37,6 @@ contract DonorNFT is ERC721, Ownable {
     /// @notice Whether a donor already has a token for a given campaign
     mapping(address => mapping(address => bool)) public hasDonorToken;
 
-    /// @notice Number of successful campaigns a donor has funded
-    mapping(address => uint256) public successfulCampaignsByDonor;
-
-    /// @notice Prevent double-counting the same completed campaign per donor
-    mapping(address => mapping(address => bool)) public donorCampaignSuccessRecorded;
-
     // ──────────────────────────────────────────────
     // Events (ERC-5192)
     // ──────────────────────────────────────────────
@@ -105,93 +99,36 @@ contract DonorNFT is ERC721, Ownable {
         return tokenId;
     }
 
-    /// @notice Record that a donor backed a campaign that reached successful completion
-    function recordCampaignSuccess(address donor, address campaign) external {
-        require(authorizedMinters[msg.sender], "DonorNFT: not authorized");
-        require(msg.sender == campaign, "DonorNFT: campaign caller mismatch");
-        require(hasDonorToken[campaign][donor], "DonorNFT: donor has no token for campaign");
-        require(!donorCampaignSuccessRecorded[campaign][donor], "DonorNFT: campaign success already recorded");
-
-        donorCampaignSuccessRecorded[campaign][donor] = true;
-        successfulCampaignsByDonor[donor] += 1;
-    }
-
-    function getSupporterTier(address donor) public view returns (uint8) {
-        uint256 successfulCampaigns = successfulCampaignsByDonor[donor];
-        if (successfulCampaigns >= 3) {
-            return 2; // Gold
-        }
-        if (successfulCampaigns >= 1) {
-            return 1; // Silver
-        }
-        return 0; // Bronze
-    }
-
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
         ownerOf(tokenId);
 
         DonorToken memory donorToken = tokenData[tokenId];
-        address owner = ownerOf(tokenId);
-        uint8 tier = getSupporterTier(owner);
         string memory metadata = Base64.encode(
-            bytes(_buildMetadata(tokenId, donorToken, owner, tier))
+            bytes(_buildMetadata(tokenId, donorToken))
         );
 
         return string(abi.encodePacked("data:application/json;base64,", metadata));
     }
 
-    function _tierBorderColor(uint8 tier) internal pure returns (string memory) {
-        if (tier == 2) {
-            return "#FFC900";
-        }
-        if (tier == 1) {
-            return "#B6C2CF";
-        }
-        return "#CD7F32";
-    }
-
-    function _tierName(uint8 tier) internal pure returns (string memory) {
-        if (tier == 2) {
-            return "Gold";
-        }
-        if (tier == 1) {
-            return "Silver";
-        }
-        return "Bronze";
-    }
-
     function _buildImage(
-        DonorToken memory donorToken,
-        address owner,
-        uint8 tier
-    ) internal view returns (string memory) {
-        string memory tierName = _tierName(tier);
-        string memory tierColor = _tierBorderColor(tier);
-
+        DonorToken memory donorToken
+    ) internal pure returns (string memory) {
         return Base64.encode(
             bytes(
                 string(
                     abi.encodePacked(
                         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 480">',
                         '<rect width="480" height="480" fill="#F4F0EA"/>',
-                        '<rect x="22" y="22" width="436" height="436" rx="20" fill="#FFFFFF" stroke="',
-                        tierColor,
-                        '" stroke-width="24"/>',
+                        '<rect x="22" y="22" width="436" height="436" rx="20" fill="#FFFFFF" stroke="#141414" stroke-width="24"/>',
                         '<rect x="48" y="48" width="384" height="384" rx="16" fill="#111111"/>',
                         '<text x="240" y="150" text-anchor="middle" fill="#F4F0EA" font-size="30" font-family="monospace">ImpactFund Donor</text>',
-                        '<text x="240" y="228" text-anchor="middle" fill="',
-                        tierColor,
-                        '" font-size="54" font-family="monospace">',
-                        tierName,
-                        "</text>",
+                        '<text x="240" y="228" text-anchor="middle" fill="#E2E800" font-size="42" font-family="monospace">Donation Proof</text>',
                         '<text x="240" y="286" text-anchor="middle" fill="#F4F0EA" font-size="22" font-family="monospace">Donated ',
                         Strings.toString(donorToken.amountDonated / 1e15),
                         " finney</text>",
-                        '<text x="240" y="334" text-anchor="middle" fill="#F4F0EA" font-size="18" font-family="monospace">Successful campaigns ',
-                        Strings.toString(successfulCampaignsByDonor[owner]),
-                        "</text>",
+                        '<text x="240" y="334" text-anchor="middle" fill="#F4F0EA" font-size="18" font-family="monospace">Campaign contributor</text>',
                         '<text x="240" y="382" text-anchor="middle" fill="#F4F0EA" font-size="16" font-family="monospace">',
-                        Strings.toHexString(uint160(owner), 20),
+                        Strings.toHexString(uint160(donorToken.donor), 20),
                         "</text>",
                         "</svg>"
                     )
@@ -202,29 +139,24 @@ contract DonorNFT is ERC721, Ownable {
 
     function _buildMetadata(
         uint256 tokenId,
-        DonorToken memory donorToken,
-        address owner,
-        uint8 tier
-    ) internal view returns (string memory) {
+        DonorToken memory donorToken
+    ) internal pure returns (string memory) {
         return string(
             abi.encodePacked(
                 '{"name":"ImpactFund Donor #',
                 Strings.toString(tokenId),
-                '","description":"A soulbound donor NFT that evolves as the donor backs successful ImpactFund campaigns.",',
+                '","description":"A soulbound donor NFT that proves a wallet backed a specific ImpactFund campaign.",',
                 '"image":"data:image/svg+xml;base64,',
-                _buildImage(donorToken, owner, tier),
+                _buildImage(donorToken),
                 '","attributes":[',
-                '{"trait_type":"Supporter Tier","value":"',
-                _tierName(tier),
-                '"},',
                 '{"trait_type":"Amount Donated (wei)","value":"',
                 Strings.toString(donorToken.amountDonated),
                 '"},',
-                '{"trait_type":"Successful Campaigns Funded","value":',
-                Strings.toString(successfulCampaignsByDonor[owner]),
-                "},",
                 '{"trait_type":"Campaign Address","value":"',
                 Strings.toHexString(uint160(donorToken.campaignAddress), 20),
+                '"},',
+                '{"trait_type":"Donor Address","value":"',
+                Strings.toHexString(uint160(donorToken.donor), 20),
                 '"}]}'
             )
         );

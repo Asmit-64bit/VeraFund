@@ -117,7 +117,6 @@ function parseMilestoneResponse(rawMilestone: {
 function parseCampaignResponse(rawCampaign: {
   address: string;
   factoryAddress?: string | null;
-  fundingUnlockModel?: CampaignInfo["fundingUnlockModel"];
   ngoAddress: string;
   title: string;
   description: string;
@@ -138,7 +137,6 @@ function parseCampaignResponse(rawCampaign: {
   return {
     address: rawCampaign.address,
     factoryAddress: rawCampaign.factoryAddress || null,
-    fundingUnlockModel: rawCampaign.fundingUnlockModel || "threshold_gated",
     ngoAddress: rawCampaign.ngoAddress,
     title: rawCampaign.title,
     description: rawCampaign.description,
@@ -293,23 +291,14 @@ async function loadCampaignSnapshot(
     }
   );
 
-  let bootstrapReleased = Number(info.status) !== 0;
-  let fundingUnlockModel: CampaignInfo["fundingUnlockModel"] = "legacy_goal_gated";
-
-  try {
-    bootstrapReleased = await readWithFallback(
-      `Bootstrap state ${address.slice(0, 8)} fetch`,
-      provider,
-      async (readProvider) => {
-        const campaign = new ethers.Contract(address, CAMPAIGN_ABI, readProvider);
-        return campaign.bootstrapReleased();
-      }
-    );
-    fundingUnlockModel = "threshold_gated";
-  } catch {
-    bootstrapReleased = Number(info.status) !== 0;
-    fundingUnlockModel = "legacy_goal_gated";
-  }
+  const bootstrapReleased = await readWithFallback(
+    `Bootstrap state ${address.slice(0, 8)} fetch`,
+    provider,
+    async (readProvider) => {
+      const campaign = new ethers.Contract(address, CAMPAIGN_ABI, readProvider);
+      return campaign.bootstrapReleased();
+    }
+  ).catch(() => Number(info.status) !== 0);
 
   const profileCid = extractProfileCid(info.description);
   const profile = profileCid ? await fetchCampaignProfile(profileCid).catch(() => null) : null;
@@ -328,7 +317,6 @@ async function loadCampaignSnapshot(
     campaignDeadline: Number(info.campaignDeadline),
     bootstrapPercent: Number(info.bootstrapPercent),
     bootstrapReleased: Boolean(bootstrapReleased),
-    fundingUnlockModel,
     status: Number(info.status),
     milestoneCount: Number(info.milestoneCount),
     ...(account ? { userDonation: donation as bigint } : {}),
@@ -511,11 +499,10 @@ export function useCampaign(provider: AnyProvider, address: string | undefined) 
       }
 
       const sourceFactory =
-        READONLY_FACTORY_ADDRESSES.length > 1
-          ? (
-              await loadAllFactoryCampaignAddresses(provider)
-            ).find((entry) => entry.address.toLowerCase() === address.toLowerCase())?.factoryAddress
-          : FACTORY_ADDRESS;
+        (
+          await loadAllFactoryCampaignAddresses(provider)
+        ).find((entry) => entry.address.toLowerCase() === address.toLowerCase())?.factoryAddress ||
+        FACTORY_ADDRESS;
 
       const [campaignInfo, allMilestones] = await Promise.all([
         loadCampaignSnapshot(address, provider, undefined, sourceFactory),
