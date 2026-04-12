@@ -16,6 +16,7 @@ const {
 } = require("../../lib/evidenceStore");
 
 const router = express.Router();
+const OPENAI_TIMEOUT_MS = 45_000;
 
 // In-memory verdict cache: key = "${campaignAddress}_${milestoneId}"
 const verdictCache = {};
@@ -40,18 +41,26 @@ function parseJsonResponse(content) {
 }
 
 async function requestOpenAIJson(messages) {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error("Missing OPENAI_API_KEY");
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
+
   const openaiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
     },
+    signal: controller.signal,
     body: JSON.stringify({
       model: "gpt-4o",
       messages,
       max_tokens: 500,
     }),
-  });
+  }).finally(() => clearTimeout(timeoutId));
 
   if (!openaiResponse.ok) {
     const errBody = await openaiResponse.text();
@@ -337,7 +346,6 @@ Assess whether the scene plausibly matches the claimed project environment and l
       const campaignContract = new ethers.Contract(campaignAddress, CAMPAIGN_ABI, signer);
       const tx = await campaignContract.setAIScore(milestoneId, verdict.score);
       await tx.wait();
-      console.log(`AI score ${verdict.score} written on-chain for ${cacheKey}, tx: ${tx.hash}`);
     } catch (chainErr) {
       console.error("Failed to write AI score on-chain:", chainErr.message);
       // Still return the verdict — on-chain write is best-effort

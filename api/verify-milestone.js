@@ -20,6 +20,7 @@ const CAMPAIGN_ABI = [
 
 const verdictCache = {};
 const evidenceMetadataCache = {};
+const OPENAI_TIMEOUT_MS = 45_000;
 
 function buildBindingSummaryText(bindingSummary) {
   if (!bindingSummary?.notes?.length) {
@@ -40,18 +41,26 @@ function parseJsonResponse(content) {
 }
 
 async function requestOpenAIJson(messages) {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error("Missing OPENAI_API_KEY");
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
+
   const openaiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
     },
+    signal: controller.signal,
     body: JSON.stringify({
       model: "gpt-4o",
       messages,
       max_tokens: 500,
     }),
-  });
+  }).finally(() => clearTimeout(timeoutId));
 
   if (!openaiResponse.ok) {
     const errBody = await openaiResponse.text();

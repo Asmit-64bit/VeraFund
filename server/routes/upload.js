@@ -73,7 +73,7 @@ router.post("/upload-evidence", upload.array("files", 10), async (req, res) => {
       );
       evidenceMetadata.__fileBuffer = await fs.promises.readFile(file.path);
       await enrichAuthenticityChecks(evidenceMetadata);
-        const readableStream = fs.createReadStream(file.path);
+      const readableStream = fs.createReadStream(file.path);
       const result = await pinata.pinFileToIPFS(readableStream, {
         pinataMetadata: {
           name: file.originalname,
@@ -84,7 +84,6 @@ router.post("/upload-evidence", upload.array("files", 10), async (req, res) => {
         cid: result.IpfsHash,
         ...evidenceMetadata,
       });
-
     }
 
     res.json({ cids, uploads, claimedLocation, proofCode });

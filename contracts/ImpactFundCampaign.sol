@@ -159,9 +159,14 @@ contract ImpactFundCampaign is ReentrancyGuard {
         address _donorNFT,
         address _backendSigner
     ) {
+        require(_ngoAddress != address(0), "Campaign: NGO address required");
+        require(_donorNFT != address(0), "Campaign: donor NFT address required");
+        require(_backendSigner != address(0), "Campaign: backend signer required");
         require(_goalAmount > 0, "Campaign: goal must be > 0");
         require(_campaignDeadline > block.timestamp, "Campaign: deadline must be in the future");
         require(_bootstrapPercent >= 1 && _bootstrapPercent <= 15, "Campaign: bootstrap must be 1-15%");
+        require(bytes(_title).length > 0, "Campaign: title required");
+        require(bytes(_ngoName).length > 0, "Campaign: NGO name required");
 
         ngoAddress = _ngoAddress;
         title = _title;

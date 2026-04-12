@@ -109,6 +109,27 @@ describe("ImpactFund — Full Contract Suite (v2: Bootstrap + Quorum + AI)", fun
       ).to.emit(factory, "CampaignCreated");
     });
 
+    it("should reject an empty title", async function () {
+      const milestones = milestoneInputs(DEADLINE);
+      await expect(
+        factory.connect(ngo).createCampaign("", DESCRIPTION, NGO_NAME, BOOTSTRAP_PERCENT, milestones, GOAL, DEADLINE)
+      ).to.be.revertedWith("Factory: title required");
+    });
+
+    it("should reject an empty NGO name", async function () {
+      const milestones = milestoneInputs(DEADLINE);
+      await expect(
+        factory.connect(ngo).createCampaign(TITLE, DESCRIPTION, "", BOOTSTRAP_PERCENT, milestones, GOAL, DEADLINE)
+      ).to.be.revertedWith("Factory: NGO name required");
+    });
+
+    it("should reject a zero funding goal", async function () {
+      const milestones = milestoneInputs(DEADLINE);
+      await expect(
+        factory.connect(ngo).createCampaign(TITLE, DESCRIPTION, NGO_NAME, BOOTSTRAP_PERCENT, milestones, 0, DEADLINE)
+      ).to.be.revertedWith("Factory: goal must be > 0");
+    });
+
     it("should reject milestones not summing to 100", async function () {
       const badMilestones = [
         { title: "A", description: "a", fundPercent: 50, deadline: DEADLINE + 86400 },

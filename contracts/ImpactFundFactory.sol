@@ -50,6 +50,9 @@ contract ImpactFundFactory {
     // ──────────────────────────────────────────────
 
     constructor(address _donorNFT, address _backendSigner) {
+        require(_donorNFT != address(0), "Factory: donor NFT address required");
+        require(_backendSigner != address(0), "Factory: backend signer required");
+
         donorNFT = DonorNFT(_donorNFT);
         backendSigner = _backendSigner;
     }
@@ -76,6 +79,10 @@ contract ImpactFundFactory {
         uint256 _goalAmount,
         uint256 _campaignDeadline
     ) external returns (address) {
+        require(bytes(_title).length > 0, "Factory: title required");
+        require(bytes(_ngoName).length > 0, "Factory: NGO name required");
+        require(_goalAmount > 0, "Factory: goal must be > 0");
+
         // Validate milestone percentages sum to 100 (of post-bootstrap amount)
         uint256 totalPercent = 0;
         for (uint256 i = 0; i < _milestones.length; i++) {
