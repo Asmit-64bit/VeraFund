@@ -2,7 +2,15 @@
 
 ![VeraFund Banner](./client/public/assets/veraFundBanner.png)
 
-VeraFund is a milestone-based donation escrow platform built on Sepolia. Donors fund campaigns through a smart contract, organisers unlock money only after milestone proof is submitted, and donors can inspect what happened through a readable audit trail instead of raw blockchain logs.
+VeraFund is a milestone-based donation escrow platform built on Sepolia. Donors send ETH into a transparent smart contract, organisers unlock funds only after milestone proof is submitted, and everyone can audit what happened through a readable on-chain trail instead of raw blockchain logs.
+
+## What VeraFund does
+
+- Locks donations in a smart contract instead of paying everything out up front
+- Releases funds in milestone tranches, not one lump sum
+- Lets donors vote on milestone proof
+- Uses AI plus authenticity checks to review submitted evidence
+- Shows an audit trail that ordinary users can actually understand
 
 ## Problem
 
@@ -18,7 +26,7 @@ How can donors know that money is released only when the promised work is actual
 
 ## Solution
 
-VeraFund breaks each campaign into a bootstrap tranche and later milestones.
+VeraFund breaks every campaign into a bootstrap tranche and later milestones.
 
 - Donations are locked in a campaign smart contract.
 - The bootstrap tranche unlocks when its own funding threshold is reached.
@@ -31,6 +39,12 @@ VeraFund breaks each campaign into a bootstrap tranche and later milestones.
 - If fundraising fails or a campaign becomes stale, donors can claim refunds from the locked remainder.
 
 ## Architecture
+
+VeraFund is split into three layers:
+
+- Solidity contracts for fundraising, milestone state, voting, and refunds
+- a React frontend for campaign discovery, donation, profile management, milestone proof submission, and audit views
+- backend verification routes for media upload, IPFS proxying, campaign reads, and proof analysis
 
 ### Smart contracts
 
@@ -135,10 +149,8 @@ Each entry links to the underlying transaction on Etherscan.
 
 ## Current Sepolia deployment
 
-- DonorNFT:
-  [0x25c992175fE2A0Cc31F381f0C6894B3376353BCd](https://sepolia.etherscan.io/address/0x25c992175fE2A0Cc31F381f0C6894B3376353BCd#code)
-- VeraFund Factory:
-  [0x6A837595E2592d699d48eB2DAcF47Df9493035d2](https://sepolia.etherscan.io/address/0x6A837595E2592d699d48eB2DAcF47Df9493035d2#code)
+- DonorNFT: [0x25c992175fE2A0Cc31F381f0C6894B3376353BCd](https://sepolia.etherscan.io/address/0x25c992175fE2A0Cc31F381f0C6894B3376353BCd#code)
+- VeraFund Factory: [0x6A837595E2592d699d48eB2DAcF47Df9493035d2](https://sepolia.etherscan.io/address/0x6A837595E2592d699d48eB2DAcF47Df9493035d2#code)
 
 ## Demo steps
 
@@ -217,6 +229,10 @@ Local URLs:
 8. Vote as a donor.
 9. Resolve the milestone when the vote completes or when all donor weight has voted.
 10. Inspect the audit trail and donor-facing verification output.
+
+## Why this matters
+
+VeraFund focuses on one simple promise: money should move only when work is actually shown, reviewed, and approved. The combination of milestone escrow, donor voting, readable audit logs, and AI-assisted evidence review makes the donation flow more transparent than a typical crowdfunding or charity site.
 
 ## Development notes
 
